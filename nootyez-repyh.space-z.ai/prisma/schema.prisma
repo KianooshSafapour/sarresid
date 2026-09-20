@@ -1,0 +1,414 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============ PEOPLE ============
+
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  pin       String   @default("1234")
+  roles     String   @default("STAFF") // comma-separated: OWNER,GENERAL_MANAGER,OPERATION_MANAGER,PRODUCT_MANAGER,ACCOUNTANT,INVENTORY_SUPERVISOR,DELIVERY_RECEIVER,CASHIER,SALESPERSON,MERCHANDISER,IT_ADMIN
+  color     String   @default("#5F7A4E")
+  active    Boolean  @default(true)
+  points    Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+// ============ SUPPLY CHAIN ============
+
+model Company {
+  id        Int      @id @default(autoincrement())
+  name      String
+  note      String?
+  suppliers SupplierCompany[]
+  products  Product[]
+}
+
+model Supplier {
+  id           Int      @id @default(autoincrement())
+  name         String
+  kind         String   @default("DISTRIBUTOR") // MANUFACTURER | DISTRIBUTOR | BOTH
+  phone        String?
+  note         String?
+  paymentTerms String   @default("CASH") // CASH | CHEQUE | MIXED
+  chequeDays   Int      @default(30)
+  companies    SupplierCompany[]
+  products     Product[]
+  orders       Order[]
+}
+
+model SupplierCompany {
+  supplierId Int
+  companyId  Int
+  supplier   Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  @@id([supplierId, companyId])
+}
+
+model Product {
+  id         Int      @id @default(autoincrement())
+  name       String
+  nameFa     String?
+  barcode    String?
+  companyId  Int?
+  supplierId Int?
+  buyPrice   Float    @default(0)
+  sellPrice  Float    @default(0)
+  sellPrice2 Float? // discounted sell price
+  unit       String   @default("عدد")
+  stock      Float    @default(0)
+  minStock   Float    @default(10)
+  imageUrl   String?
+  category   String?
+  active     Boolean  @default(true)
+  mergedInto Int? // duplicate handling: points to surviving product id
+  shelfLifeDays Int? // FEFO: shelf life in days from receiving (perishables)
+  createdAt  DateTime @default(now())
+  company    Company? @relation(fields: [companyId], references: [id])
+  supplier   Supplier? @relation(fields: [supplierId], references: [id])
+  orderItems OrderItem[]
+}
+
+// ============ ORDER / DELIVERY PIPELINE ============
+
+model Order {
+  id            Int       @id @default(autoincrement())
+  code          String    @unique
+  supplierId    Int
+  createdById   Int
+  status        String    @default("DRAFT") // DRAFT SUBMITTED APPROVED RECEIVED CONFIRMED DONE CANCELLED
+  paymentType   String    @default("CHEQUE") // CASH | CHEQUE | MIXED
+  receivingDate DateTime
+  note          String?
+  correction    String? // corrections added after approval
+  subtotal      Float     @default(0)
+  discount      Float     @default(0)
+  tax           Float     @default(0)
+  vat           Float     @default(0)
+  total         Float     @default(0)
+  createdAt     DateTime  @default(now())
+  approvedAt    DateTime?
+  receivedAt    DateTime?
+  confirmedAt   DateTime?
+  doneAt        DateTime?
+  supplier      Supplier  @relation(fields: [supplierId], references: [id])
+  items         OrderItem[]
+  events        OrderEvent[]
+  cheques       Cheque[]
+}
+
+model OrderItem {
+  id           Int      @id @default(autoincrement())
+  orderId      Int
+  productId    Int?
+  name         String
+  barcode      String?
+  qty          Float
+  unitCost     Float    @default(0)
+  sellPrice    Float    @default(0)
+  deliveredQty Float? // entered at delivery receiving
+  confirmedQty Float? // entered by inventory supervisor
+  printedPrice Float? // price printed on product (correctable)
+  finalCost    Float? // corrected unit cost used for accounting
+  status       String   @default("PENDING") // PENDING OK MISSING REJECTED
+  note         String?
+  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product      Product? @relation(fields: [productId], references: [id])
+}
+
+model OrderEvent {
+  id        Int      @id @default(autoincrement())
+  orderId   Int
+  userName  String
+  action    String
+  detail    String?
+  createdAt DateTime @default(now())
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+// ============ PAYMENTS ============
+
+model Cheque {
+  id             Int       @id @default(autoincrement())
+  orderId        Int?
+  purpose        String    @default("ORDER") // ORDER | OTHER
+  payee          String? // person receiving the cheque (representative)
+  amount         Float
+  dueDate        DateTime
+  status         String    @default("PENDING_APPROVAL") // PENDING_APPROVAL APPROVED WRITTEN SIGNED GIVEN COLLECTED DONE REJECTED BOUNCED
+  recipientName  String?
+  recipientPhone String?
+  note           String?
+  createdById    Int
+  decidedById    Int?
+  decidedAt      DateTime?
+  writtenAt      DateTime?
+  signedAt       DateTime?
+  givenAt        DateTime?
+  collectedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  order          Order?    @relation(fields: [orderId], references: [id])
+}
+
+model Holiday {
+  id     Int    @id @default(autoincrement())
+  date   String @unique // ISO yyyy-mm-dd (gregorian)
+  title  String
+  source String @default("MANUAL") // MANUAL | WEB
+}
+
+// ============ STAFF WORK ============
+
+model Task {
+  id          Int       @id @default(autoincrement())
+  title       String
+  description String?
+  priority    String    @default("MEDIUM") // LOW MEDIUM HIGH URGENT
+  status      String    @default("OPEN") // OPEN IN_PROGRESS PAUSED DONE CANCELLED
+  assignedToId Int
+  createdById Int
+  dueDate     DateTime?
+  pauseReason String?
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+}
+
+model SOP {
+  id          Int      @id @default(autoincrement())
+  title       String
+  department  String   @default("GENERAL")
+  steps       String // JSON array of strings
+  createdById Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model WallPost {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  content   String
+  pinned    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model PersonalNote {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  title     String
+  content   String?
+  color     String   @default("olive")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Feedback {
+  id        Int      @id @default(autoincrement())
+  content   String
+  rating    Int? // 1..5 anonymous
+  createdAt DateTime @default(now())
+}
+
+model Idea {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  title     String
+  content   String
+  status    String    @default("SUBMITTED") // SUBMITTED REVIEWING ACCEPTED IMPLEMENTED REJECTED
+  decision  String?
+  createdAt DateTime  @default(now())
+  decidedAt DateTime?
+}
+
+// ============ MESSAGING ============
+
+model Conversation {
+  id        Int      @id @default(autoincrement())
+  userAId   Int
+  userBId   Int
+  createdAt DateTime @default(now())
+  messages  Message[]
+}
+
+model Message {
+  id             Int       @id @default(autoincrement())
+  conversationId Int
+  senderId       Int
+  content        String
+  createdAt      DateTime  @default(now())
+  readAt         DateTime?
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+}
+
+// ============ SYSTEM ============
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  userName  String
+  action    String
+  entity    String
+  entityId  Int?
+  detail    String?
+  createdAt DateTime @default(now())
+}
+
+model PointsLog {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  points     Int
+  reason     String
+  awardedById Int?
+  createdAt  DateTime @default(now())
+}
+
+model Notification {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  title     String
+  body      String?
+  type      String    @default("INFO") // INFO SUCCESS WARNING ERROR
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model Setting {
+  key   String @id
+  value String
+}
+
+// ============ OPS EXTRAS ============
+
+model Planogram {
+  id          Int       @id @default(autoincrement())
+  name        String
+  layout      String // JSON: rows of shelves, each shelf = list of {productId, facing}
+  status      String    @default("DRAFT") // DRAFT PUBLISHED ARCHIVED
+  assignedToId Int? // merchandiser
+  createdById Int
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model WarehouseRequest {
+  id            Int       @id @default(autoincrement())
+  productId     Int
+  qty           Float
+  requestedById Int
+  status        String    @default("OPEN") // OPEN PREPARED RECEIVED CANCELLED
+  note          String?
+  createdAt     DateTime  @default(now())
+  preparedAt    DateTime?
+}
+
+model CustomerRequest {
+  id            Int      @id @default(autoincrement())
+  name          String // product customers asked for that we don't stock
+  barcode       String?
+  count         Int      @default(1)
+  note          String?
+  requestedById Int
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Customer {
+  id          Int      @id @default(autoincrement())
+  name        String
+  phone       String?
+  preference  String? // tastes / notes for personalized suggestions
+  createdById Int
+  createdAt   DateTime @default(now())
+}
+
+model PreOrder {
+  id             Int       @id @default(autoincrement())
+  customerId     Int?
+  customerName   String?
+  salespersonId  Int
+  items          String // JSON [{productId,name,qty,sellPrice}]
+  status         String    @default("PENDING") // PENDING PREPARED DONE CANCELLED
+  cashierId      Int?
+  total          Float     @default(0)
+  note           String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+model Sale {
+  id            Int      @id @default(autoincrement())
+  productId     Int?
+  name          String
+  qty           Float    @default(1)
+  unitPrice     Float    @default(0)
+  total         Float    @default(0)
+  customerId    Int?
+  customerName  String?
+  channel       String   @default("WALKIN") // WALKIN | PREORDER
+  salespersonId Int
+  cashierId     Int?
+  preOrderId    Int?
+  note          String?
+  createdAt     DateTime @default(now())
+}
+
+// ============ RESEARCH-BACKED OPS ============
+
+// Retail shrinkage ledger (academic: shrinkage 1–3% of grocery sales; causes:
+// spoilage, expiry, damage, theft — ECR Shrinkage roadmap, ECR Loss 2020).
+model ShrinkageLog {
+  id           Int      @id @default(autoincrement())
+  productId    Int?
+  name         String
+  qty          Float
+  unitCost     Float    @default(0)
+  reason       String   @default("SPOILAGE") // SPOILAGE | EXPIRED | DAMAGED | THEFT | OTHER
+  note         String?
+  reportedById Int
+  createdAt    DateTime @default(now())
+}
+
+// Industry demo simulator: one row = one generated virtual demo company
+// (JSON snapshot), used to showcase the platform to prospective testers.
+model DemoCompany {
+  id          Int      @id @default(autoincrement())
+  name        String
+  sizeKey     String   @default("MID") // BOUTIQUE | MID | LARGE
+  data        String // full JSON snapshot of the generated virtual company
+  createdById Int
+  createdAt   DateTime @default(now())
+}
+
+// ============ PILOT PROGRAM (field testers) ============
+
+model PilotTester {
+  id          Int             @id @default(autoincrement())
+  companyName String
+  contactName String
+  phone       String?
+  city        String?
+  sizeKey     String          @default("MID") // BOUTIQUE | MID | LARGE
+  inviteCode  String          @unique
+  status      String          @default("INVITED") // INVITED ACTIVE COMPLETED DECLINED
+  notes       String?
+  createdById Int
+  createdAt   DateTime        @default(now())
+  feedback    PilotFeedback[]
+}
+
+model PilotFeedback {
+  id           Int         @id @default(autoincrement())
+  testerId     Int
+  tester       PilotTester @relation(fields: [testerId], references: [id], onDelete: Cascade)
+  moduleKey    String
+  rating       Int // 1..5
+  timeSavedMin Int? // self-reported minutes saved per week by this module
+  comment      String?
+  createdAt    DateTime    @default(now())
+}

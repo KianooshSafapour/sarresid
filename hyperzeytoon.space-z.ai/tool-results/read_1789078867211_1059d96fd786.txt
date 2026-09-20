@@ -1,0 +1,934 @@
+     1→'use client'
+     2→
+     3→// Payments — Jalali cheque calendar, cheque lifecycle (owner/gm), split, payments ledger
+     4→import * as React from 'react'
+     5→import { SectionHeader, StatusBadge, EmptyState, LoadingBlock, ChipSelect, StatCard } from '@/components/platform/ui/shared'
+     6→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+     7→import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+     8→import { Button } from '@/components/ui/button'
+     9→import { Input } from '@/components/ui/input'
+    10→import { Textarea } from '@/components/ui/textarea'
+    11→import { Switch } from '@/components/ui/switch'
+    12→import { Badge } from '@/components/ui/badge'
+    13→import {
+    14→  Wallet, Plus, Loader2, PenLine, XCircle, Truck, BadgeCheck, AlertTriangle, SplitSquareHorizontal, Ban,
+    15→} from 'lucide-react'
+    16→import { cn } from '@/lib/utils'
+    17→import { api } from '@/lib/api'
+    18→import { toast } from '@/hooks/use-toast'
+    19→import {
+    20→  money, toFaDigits, toEnDigits, isoDay, formatJalali, formatJalaliDateTime, formatJalaliFull,
+    21→  jalaliMonthGrid, toJalali, JALALI_MONTHS, JALALI_WEEKDAYS_SHORT,
+    22→} from '@/lib/jalali'
+    23→import { CHEQUE_STATUSES, chequeStatusInfo } from '@/lib/types'
+    24→import { useApp } from '@/store/app'
+    25→import { JalaliDatePicker } from '@/components/platform/ui/jalali-date-picker'
+    26→import { isClosedDay, suggestOpenDay, holidaySetOf, useCatalog } from './commerce-bits'
+    27→
+    28→interface ChequeRow {
+    29→  id: string
+    30→  number: string
+    31→  amount: number
+    32→  dueDate: string
+    33→  issueDate: string
+    34→  payeeName: string
+    35→  payeePhone?: string | null
+    36→  orderId?: string | null
+    37→  isForOrder: boolean
+    38→  status: string
+    39→  note?: string | null
+    40→  writtenAt?: string | null
+    41→  collectedAt?: string | null
+    42→  givenTo?: string | null
+    43→  signedById?: string | null
+    44→  orderCode?: string | null
+    45→}
+    46→
+    47→interface PaymentRow {
+    48→  id: string
+    49→  orderCode?: string | null
+    50→  amount: number
+    51→  type: string
+    52→  receiptNo?: string | null
+    53→  posReceiptNo?: string | null
+    54→  note?: string | null
+    55→  userName: string
+    56→  createdAt: string
+    57→}
+    58→
+    59→interface OrderLite {
+    60→  id: string
+    61→  code: string
+    62→  providerName: string
+    63→  finalAmount: number
+    64→}
+    65→
+    66→const CHEQUE_FILTERS = [{ key: 'ALL', label: 'همه', color: '#3E7C59' }, ...CHEQUE_STATUSES] as { key: string; label: string; color: string }[]
+    67→
+    68→const PAYMENT_TYPES = [
+    69→  { key: 'CASH_ON_DELIVERY', label: 'نقدی هنگام تحویل' },
+    70→  { key: 'CHEQUE', label: 'چک' },
+    71→  { key: 'TRANSFER', label: 'انتقال بانکی' },
+    72→  { key: 'OTHER', label: 'سایر' },
+    73→]
+    74→
+    75→export function Payments() {
+    76→  const user = useApp((s) => s.user)
+    77→  const { data: catalog } = useCatalog()
+    78→  const holidaySet = React.useMemo(() => holidaySetOf(catalog), [catalog])
+    79→
+    80→  const isOwner = Boolean(user && user.roleKeys.includes('owner'))
+    81→  const isGmTeam = Boolean(user && (user.isManager || ['gm', 'om'].some((k) => user.roleKeys.includes(k))))
+    82→  const canCreateCheque = Boolean(user && (user.isManager || ['gm', 'om', 'owner', 'accountant'].some((k) => user.roleKeys.includes(k))))
+    83→  const canCreatePayment = Boolean(user && (user.isManager || user.roleKeys.includes('accountant')))
+    84→
+    85→  const [cheques, setCheques] = React.useState<ChequeRow[]>([])
+    86→  const [payments, setPayments] = React.useState<PaymentRow[]>([])
+    87→  const [meta, setMeta] = React.useState<{ todayCount: number; weekTotal: number } | null>(null)
+    88→  const [loading, setLoading] = React.useState(true)
+    89→  const [statusFilter, setStatusFilter] = React.useState<string>('ALL')
+    90→  const [ownerOnly, setOwnerOnly] = React.useState(false)
+    91→
+    92→  const refresh = React.useCallback(async () => {
+    93→    try {
+    94→      const [ch, pay] = await Promise.all([
+    95→        api<ChequeRow[]>('/api/cheques'),
+    96→        api<{ payments: PaymentRow[]; meta: { todayCount: number; weekTotal: number } }>('/api/payments?take=80'),
+    97→      ])
+    98→      setCheques(ch)
+    99→      setPayments(pay.payments)
+   100→      setMeta(pay.meta)
+   101→    } catch (e) {
+   102→      toast({ title: 'خطا در دریافت چک‌ها و پرداخت‌ها', description: e instanceof Error ? e.message : undefined, variant: 'destructive' })
+   103→    } finally {
+   104→      setLoading(false)
+   105→    }
+   106→  }, [])
+   107→
+   108→  React.useEffect(() => {
+   109→    refresh()
+   110→  }, [refresh])
+   111→
+   112→  const patchCheque = async (id: string, status: string, extra?: { note?: string; givenTo?: string }, successMsg?: string) => {
+   113→    try {
+   114→      await api('/api/cheques', { method: 'PATCH', body: { id, status, ...extra } })
+   115→      toast({ title: successMsg ?? 'وضعیت چک بروزرسانی شد ✅' })
+   116→      refresh()
+   117→      return true
+   118→    } catch (e) {
+   119→      toast({ title: 'خطا در تغییر وضعیت چک', description: e instanceof Error ? e.message : undefined, variant: 'destructive' })
+   120→      return false
+   121→    }
+   122→  }
+   123→
+   124→  const filtered = React.useMemo(() => {
+   125→    let list = cheques
+   126→    if (statusFilter !== 'ALL') list = list.filter((c) => c.status === statusFilter)
+   127→    if (ownerOnly) list = list.filter((c) => c.signedById === user?.id)
+   128→    return list
+   129→  }, [cheques, statusFilter, ownerOnly, user])
+   130→
+   131→  return (
+   132→    <div className="space-y-4">
+   133→      <SectionHeader
+   134→        title="چک‌ها و پرداخت‌ها"
+   135→        subtitle="تقویم سررسید چک‌ها، چرخه امضا/تحویل/وصول و دفتر پرداخت‌ها"
+   136→        icon={<Wallet className="h-6 w-6" />}
+   137→        actions={canCreateCheque && <CreateChequeButton holidays={holidaySet} onCreated={refresh} />}
+   138→      />
+   139→
+   140→      <div className="grid grid-cols-3 gap-3">
+   141→        <StatCard title="در انتظار امضا" value={toFaDigits(cheques.filter((c) => c.status === 'PENDING_OWNER').length)} color="#C9A227" icon={<PenLine className="h-5 w-5" />} />
+   142→        <StatCard title="مبلغ چک‌های باز" value={<span className="num">{money(cheques.filter((c) => !['COLLECTED', 'CLEARED', 'REJECTED'].includes(c.status)).reduce((s, c) => s + c.amount, 0))}</span>} hint="تومان" color="#8A6F3C" />
+   143→        <StatCard title="پرداخت هفته" value={<span className="num">{money(meta?.weekTotal ?? 0)}</span>} hint={`تومان — ${toFaDigits(meta?.todayCount ?? 0)} ثبت امروز`} color="#3E7C59" icon={<Wallet className="h-5 w-5" />} />
+   144→      </div>
+   145→
+   146→      <Tabs defaultValue="cheques" dir="rtl">
+   147→        <TabsList className="w-full sm:w-auto grid grid-cols-2 sm:flex">
+   148→          <TabsTrigger value="cheques" className="touch-target">🧾 چک‌ها</TabsTrigger>
+   149→          <TabsTrigger value="payments" className="touch-target">💳 پرداخت‌ها</TabsTrigger>
+   150→        </TabsList>
+   151→
+   152→        {/* ---------------- cheques tab ---------------- */}
+   153→        <TabsContent value="cheques" className="space-y-4 mt-3">
+   154→          <ChequeCalendar cheques={cheques} holidays={holidaySet} />
+   155→
+   156→          <div className="flex flex-wrap items-center gap-2">
+   157→            <ChipSelect options={CHEQUE_FILTERS} value={statusFilter} onChange={setStatusFilter} className="flex-1" />
+   158→            {isOwner && (
+   159→              <button
+   160→                type="button"
+   161→                onClick={() => setOwnerOnly((v) => !v)}
+   162→                aria-pressed={ownerOnly}
+   163→                className={cn(
+   164→                  'rounded-full px-3 py-1.5 text-xs font-bold border touch-target shrink-0',
+   165→                  ownerOnly ? 'bg-primary text-primary-foreground border-transparent' : 'bg-card text-muted-foreground'
+   166→                )}
+   167→              >
+   168→                ✍️ امضاهای من
+   169→              </button>
+   170→            )}
+   171→          </div>
+   172→
+   173→          {loading ? (
+   174→            <LoadingBlock rows={4} />
+   175→          ) : filtered.length === 0 ? (
+   176→            <EmptyState icon={<Wallet />} title="چکی یافت نشد" description="با فیلتر وضعیت یا تقویم سررسید، چک‌ها را ببینید." />
+   177→          ) : (
+   178→            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+   179→              {filtered.map((c) => (
+   180→                <ChequeCard
+   181→                  key={c.id}
+   182→                  cheque={c}
+   183→                  isOwner={isOwner}
+   184→                  isGmTeam={isGmTeam}
+   185→                  canSplit={canCreateCheque}
+   186→                  holidays={holidaySet}
+   187→                  onPatch={patchCheque}
+   188→                  onChanged={refresh}
+   189→                />
+   190→              ))}
+   191→            </div>
+   192→          )}
+   193→        </TabsContent>
+   194→
+   195→        {/* ---------------- payments tab ---------------- */}
+   196→        <TabsContent value="payments" className="space-y-3 mt-3">
+   197→          <div className="flex items-center justify-between">
+   198→            <p className="text-sm font-bold">دفتر پرداخت‌ها</p>
+   199→            {canCreatePayment && <CreatePaymentButton onCreated={refresh} />}
+   200→          </div>
+   201→          {loading ? (
+   202→            <LoadingBlock rows={3} />
+   203→          ) : payments.length === 0 ? (
+   204→            <EmptyState icon={<Wallet />} title="پرداختی ثبت نشده" />
+   205→          ) : (
+   206→            <div className="rounded-xl border border-border overflow-x-auto">
+   207→              <table className="w-full text-xs min-w-[560px]">
+   208→                <thead>
+   209→                  <tr className="bg-accent/60 text-muted-foreground">
+   210→                    <th className="px-3 py-2.5 text-right font-medium">نوع</th>
+   211→                    <th className="px-3 py-2.5 text-center font-medium">رسید</th>
+   212→                    <th className="px-3 py-2.5 text-center font-medium">POS</th>
+   213→                    <th className="px-3 py-2.5 text-center font-medium">مبلغ</th>
+   214→                    <th className="px-3 py-2.5 text-center font-medium">سفارش</th>
+   215→                    <th className="px-3 py-2.5 text-center font-medium">تاریخ</th>
+   216→                    <th className="px-3 py-2.5 text-center font-medium">ثبت‌کننده</th>
+   217→                  </tr>
+   218→                </thead>
+   219→                <tbody>
+   220→                  {payments.map((p) => (
+   221→                    <tr key={p.id} className="border-t border-border">
+   222→                      <td className="px-3 py-2.5">
+   223→                        <Badge variant="secondary" className="text-[10px] bg-primary/10 text-primary">{payTypeLabel(p.type)}</Badge>
+   224→                      </td>
+   225→                      <td className="px-3 py-2.5 text-center num">{p.receiptNo ?? '—'}</td>
+   226→                      <td className="px-3 py-2.5 text-center num">{p.posReceiptNo ?? '—'}</td>
+   227→                      <td className="px-3 py-2.5 text-center num font-bold">{money(p.amount)}</td>
+   228→                      <td className="px-3 py-2.5 text-center num text-primary">{p.orderCode ?? '—'}</td>
+   229→                      <td className="px-3 py-2.5 text-center num">{formatJalaliDateTime(p.createdAt)}</td>
+   230→                      <td className="px-3 py-2.5 text-center">{p.userName}</td>
+   231→                    </tr>
+   232→                  ))}
+   233→                </tbody>
+   234→              </table>
+   235→            </div>
+   236→          )}
+   237→        </TabsContent>
+   238→      </Tabs>
+   239→    </div>
+   240→  )
+   241→}
+   242→
+   243→function payTypeLabel(t: string) {
+   244→  return PAYMENT_TYPES.find((x) => x.key === t)?.label ?? t
+   245→}
+   246→
+   247→// ================= Cheque calendar =================
+   248→function ChequeCalendar({
+   249→  cheques, holidays,
+   250→}: {
+   251→  cheques: ChequeRow[]
+   252→  holidays: Set<string>
+   253→}) {
+   254→  const now = React.useMemo(() => toJalali(new Date()), [])
+   255→  const [jy, setJy] = React.useState(now.jy)
+   256→  const [jm, setJm] = React.useState(now.jm)
+   257→  const [selected, setSelected] = React.useState<string | null>(null)
+   258→
+   259→  const cells = React.useMemo(() => jalaliMonthGrid(jy, jm), [jy, jm])
+   260→
+   261→  const byDay = React.useMemo(() => {
+   262→    const m = new Map<string, { count: number; amount: number; cheques: ChequeRow[] }>()
+   263→    for (const c of cheques) {
+   264→      if (['REJECTED'].includes(c.status)) continue
+   265→      const k = isoDay(c.dueDate)
+   266→      if (!m.has(k)) m.set(k, { count: 0, amount: 0, cheques: [] })
+   267→      const e = m.get(k)!
+   268→      e.count++
+   269→      e.amount += c.amount
+   270→      e.cheques.push(c)
+   271→    }
+   272→    return m
+   273→  }, [cheques])
+   274→
+   275→  const monthTotal = React.useMemo(() => {
+   276→    let sum = 0
+   277→    let count = 0
+   278→    for (const cell of cells) {
+   279→      if (!cell) continue
+   280→      const e = byDay.get(isoDay(cell.gDate))
+   281→      if (e) { sum += e.amount; count += e.count }
+   282→    }
+   283→    return { sum, count }
+   284→  }, [cells, byDay])
+   285→
+   286→  const move = (delta: number) => {
+   287→    let nm = jm + delta
+   288→    let ny = jy
+   289→    if (nm > 12) { nm = 1; ny++ }
+   290→    if (nm < 1) { nm = 12; ny-- }
+   291→    setJm(nm)
+   292→    setJy(ny)
+   293→    setSelected(null)
+   294→  }
+   295→
+   296→  const dayCheques = selected ? byDay.get(selected)?.cheques ?? [] : []
+   297→
+   298→  return (
+   299→    <div className="rounded-2xl border border-border bg-card p-4">
+   300→      <div className="flex items-center justify-between mb-3">
+   301→        <Button variant="ghost" size="sm" className="h-9 w-9 p-0 touch-target" onClick={() => move(1)} aria-label="ماه بعد">‹</Button>
+   302→        <div className="text-center">
+   303→          <p className="font-bold text-sm">{JALALI_MONTHS[jm - 1]} {toFaDigits(jy)}</p>
+   304→          <p className="text-[11px] text-muted-foreground num">{toFaDigits(monthTotal.count)} چک — {money(monthTotal.sum)} تومان</p>
+   305→        </div>
+   306→        <Button variant="ghost" size="sm" className="h-9 w-9 p-0 touch-target" onClick={() => move(-1)} aria-label="ماه قبل">›</Button>
+   307→      </div>
+   308→
+   309→      <div className="grid grid-cols-7 gap-1 mb-1">
+   310→        {JALALI_WEEKDAYS_SHORT.map((d, i) => (
+   311→          <div key={i} className={cn('text-center text-[11px] font-medium py-1', i === 6 ? 'text-pomegranate' : 'text-muted-foreground')}>{d}</div>
+   312→        ))}
+   313→      </div>
+   314→      <div className="grid grid-cols-7 gap-1">
+   315→        {cells.map((cell, i) => {
+   316→          if (!cell) return <div key={`e${i}`} />
+   317→          const key = isoDay(cell.gDate)
+   318→          const entry = byDay.get(key)
+   319→          const isHoliday = holidays.has(key) || cell.isFriday
+   320→          const isSel = selected === key
+   321→          return (
+   322→            <button
+   323→              key={key}
+   324→              type="button"
+   325→              onClick={() => setSelected(isSel ? null : key)}
+   326→              aria-label={`${formatJalaliFull(cell.gDate)}${entry ? ` — ${entry.count} چک` : ''}`}
+   327→              className={cn(
+   328→                'relative h-14 sm:h-16 rounded-xl border text-center transition-colors flex flex-col items-center justify-center gap-0.5',
+   329→                isSel ? 'border-primary ring-2 ring-primary/30 bg-primary/5' : 'border-border hover:bg-accent/60',
+   330→                isHoliday && 'bg-pomegranate/5'
+   331→              )}
+   332→            >
+   333→              <span className={cn('text-xs num font-bold', isHoliday ? 'text-pomegranate' : 'text-foreground')}>{toFaDigits(cell.jd)}</span>
+   334→              {entry && (
+   335→                <>
+   336→                  <span className="text-[10px] num font-bold text-[#8a6f3c]">{toFaDigits(entry.count)} چک</span>
+   337→                  <span className="absolute bottom-1 flex gap-0.5" aria-hidden>
+   338→                    <span className="h-1.5 w-1.5 rounded-full bg-[#C9A227]" />
+   339→                    {entry.amount > 500_000_000 && <span className="h-1.5 w-1.5 rounded-full bg-[#8A6F3C]" />}
+   340→                  </span>
+   341→                </>
+   342→              )}
+   343→              {isHoliday && !entry && <span className="absolute bottom-1 h-1 w-1 rounded-full bg-pomegranate/60" aria-hidden />}
+   344→            </button>
+   345→          )
+   346→        })}
+   347→      </div>
+   348→
+   349→      {selected && (
+   350→        <div className="mt-3 pt-3 border-t border-border space-y-2 animate-in fade-in">
+   351→          <p className="text-xs font-bold">{formatJalaliFull(isoToDate(selected))}</p>
+   352→          {dayCheques.length === 0 ? (
+   353→            <p className="text-xs text-muted-foreground">چکی در این روز سررسید نمی‌شود</p>
+   354→          ) : (
+   355→            dayCheques.map((c) => {
+   356→              const ci = chequeStatusInfo(c.status)
+   357→              return (
+   358→                <div key={c.id} className="flex flex-wrap items-center gap-2 text-xs rounded-lg border border-border px-2.5 py-2">
+   359→                  <span className="num font-bold">{c.number}</span>
+   360→                  <span>{c.payeeName}</span>
+   361→                  <span className="num font-bold text-primary ms-auto">{money(c.amount)} تومان</span>
+   362→                  <StatusBadge label={ci.label} color={ci.color} />
+   363→                </div>
+   364→              )
+   365→            })
+   366→          )}
+   367→        </div>
+   368→      )}
+   369→    </div>
+   370→  )
+   371→}
+   372→
+   373→// helper: isoDay (gregorian yyyy-mm-dd) back to Date
+   374→function isoToDate(selected: string): Date {
+   375→  const [y, m, d] = toEnDigits(selected).split('-').map(Number)
+   376→  return new Date(y, m - 1, d)
+   377→}
+   378→
+   379→// ================= Cheque card =================
+   380→function ChequeCard({
+   381→  cheque, isOwner, isGmTeam, canSplit, holidays, onPatch, onChanged,
+   382→}: {
+   383→  cheque: ChequeRow
+   384→  isOwner: boolean
+   385→  isGmTeam: boolean
+   386→  canSplit: boolean
+   387→  holidays: Set<string>
+   388→  onPatch: (id: string, status: string, extra?: { note?: string; givenTo?: string }, msg?: string) => Promise<boolean>
+   389→  onChanged: () => void
+   390→}) {
+   391→  const c = cheque
+   392→  const ci = chequeStatusInfo(c.status)
+   393→  const [busy, setBusy] = React.useState(false)
+   394→  const [rejectOpen, setRejectOpen] = React.useState(false)
+   395→  const [rejectNote, setRejectNote] = React.useState('')
+   396→  const [deliverOpen, setDeliverOpen] = React.useState(false)
+   397→  const [givenTo, setGivenTo] = React.useState('')
+   398→  const [splitOpen, setSplitOpen] = React.useState(false)
+   399→
+   400→  const run = async (fn: () => Promise<void>) => {
+   401→    setBusy(true)
+   402→    await fn()
+   403→    setBusy(false)
+   404→  }
+   405→
+   406→  return (
+   407→    <div className={cn('rounded-2xl border bg-card p-4 space-y-2.5', ['PENDING_OWNER'].includes(c.status) ? 'border-[#C9A227]/50' : 'border-border')}>
+   408→      <div className="flex items-center justify-between gap-2">
+   409→        <span className="num font-bold text-sm">{c.number}</span>
+   410→        <StatusBadge label={ci.label} color={ci.color} />
+   411→      </div>
+   412→      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+   413→        <span className="font-bold">{c.payeeName}</span>
+   414→        {c.payeePhone && <span className="num text-muted-foreground">☎ {toFaDigits(c.payeePhone)}</span>}
+   415→        <span className="num font-extrabold text-base text-primary">{money(c.amount)} <span className="text-[10px] font-normal text-muted-foreground">تومان</span></span>
+   416→      </div>
+   417→      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+   418→        <span>📅 سررسید: <span className="num">{formatJalali(c.dueDate)}</span></span>
+   419→        {c.orderCode && <span>سفارش: <span className="num text-primary">{c.orderCode}</span></span>}
+   420→        {c.writtenAt && <span>امضا: <span className="num">{formatJalali(c.writtenAt)}</span></span>}
+   421→        {c.givenTo && <span>تحویل‌گیرنده: {c.givenTo}</span>}
+   422→        {c.collectedAt && <span>وصول: <span className="num">{formatJalali(c.collectedAt)}</span></span>}
+   423→      </div>
+   424→      {c.note && <p className="text-[11px] text-muted-foreground leading-5">{c.note}</p>}
+   425→
+   426→      <div className="flex flex-wrap gap-2 pt-1">
+   427→        {c.status === 'PENDING_OWNER' && isOwner && (
+   428→          <>
+   429→            <Button size="sm" className="touch-target font-bold" disabled={busy} onClick={() => run(async () => { await onPatch(c.id, 'SIGNED', {}, 'چک امضا و تأیید شد ✍️') })}>
+   430→              <PenLine className="h-4 w-4" /> امضا و تأیید
+   431→            </Button>
+   432→            <Button size="sm" variant="outline" className="touch-target text-pomegranate border-pomegranate/40" disabled={busy} onClick={() => setRejectOpen(true)}>
+   433→              <XCircle className="h-4 w-4" /> رد
+   434→            </Button>
+   435→          </>
+   436→        )}
+   437→        {c.status === 'SIGNED' && isGmTeam && (
+   438→          <Button size="sm" className="touch-target" disabled={busy} onClick={() => { setGivenTo(''); setDeliverOpen(true) }}>
+   439→            <Truck className="h-4 w-4" /> تحویل به نماینده
+   440→          </Button>
+   441→        )}
+   442→        {c.status === 'DELIVERED' && isGmTeam && (
+   443→          <Button size="sm" className="touch-target" disabled={busy} onClick={() => run(async () => { await onPatch(c.id, 'COLLECTED', {}, 'چک وصول شد ✅') })}>
+   444→            <BadgeCheck className="h-4 w-4" /> وصول شد
+   445→          </Button>
+   446→        )}
+   447→        {['SIGNED', 'DELIVERED'].includes(c.status) && isGmTeam && (
+   448→          <Button size="sm" variant="outline" className="touch-target text-[#B07D2B] border-[#B07D2B]/40" disabled={busy} onClick={() => run(async () => { await onPatch(c.id, 'UNCOLLECTED_REPORTED', {}, 'پیگیری عدم دریافت ثبت شد') })}>
+   449→            <AlertTriangle className="h-4 w-4" /> پیگیری عدم دریافت
+   450→          </Button>
+   451→        )}
+   452→        {['PENDING_OWNER', 'SIGNED'].includes(c.status) && canSplit && (
+   453→          <Button size="sm" variant="outline" className="touch-target" onClick={() => setSplitOpen(true)}>
+   454→            <SplitSquareHorizontal className="h-4 w-4" /> تقسیم چک
+   455→          </Button>
+   456→        )}
+   457→      </div>
+   458→
+   459→      {/* reject dialog */}
+   460→      <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
+   461→        <DialogContent className="max-w-sm">
+   462→          <DialogHeader>
+   463→            <DialogTitle className="text-base">رد چک {c.number}</DialogTitle>
+   464→            <DialogDescription className="text-xs">دلیل رد در یادداشت چک ثبت می‌شود.</DialogDescription>
+   465→          </DialogHeader>
+   466→          <Textarea value={rejectNote} onChange={(e) => setRejectNote(e.target.value)} placeholder="دلیل رد…" className="min-h-20" aria-label="دلیل رد" />
+   467→          <div className="flex justify-end gap-2">
+   468→            <Button variant="outline" size="sm" className="touch-target" onClick={() => setRejectOpen(false)}>انصراف</Button>
+   469→            <Button
+   470→              variant="destructive"
+   471→              size="sm"
+   472→              className="touch-target"
+   473→              disabled={busy}
+   474→              onClick={() =>
+   475→                run(async () => {
+   476→                  const okRes = await onPatch(c.id, 'REJECTED', { note: rejectNote || 'رد شده توسط مالک' }, 'چک رد شد')
+   477→                  if (okRes) setRejectOpen(false)
+   478→                })
+   479→              }
+   480→            >
+   481→              <Ban className="h-4 w-4" /> رد قطعی
+   482→            </Button>
+   483→          </div>
+   484→        </DialogContent>
+   485→      </Dialog>
+   486→
+   487→      {/* deliver dialog */}
+   488→      <Dialog open={deliverOpen} onOpenChange={setDeliverOpen}>
+   489→        <DialogContent className="max-w-sm">
+   490→          <DialogHeader>
+   491→            <DialogTitle className="text-base">تحویل چک به نماینده</DialogTitle>
+   492→            <DialogDescription className="text-xs">نام نماینده‌ای که چک را می‌برد را وارد کنید.</DialogDescription>
+   493→          </DialogHeader>
+   494→          <Input value={givenTo} onChange={(e) => setGivenTo(e.target.value)} placeholder="نام نماینده…" className="h-11" aria-label="نام نماینده" />
+   495→          <div className="flex justify-end gap-2">
+   496→            <Button variant="outline" size="sm" className="touch-target" onClick={() => setDeliverOpen(false)}>انصراف</Button>
+   497→            <Button
+   498→              size="sm"
+   499→              className="touch-target"
+   500→              disabled={busy || !givenTo.trim()}
+   501→              onClick={() =>
+   502→                run(async () => {
+   503→                  const okRes = await onPatch(c.id, 'DELIVERED', { givenTo: givenTo.trim() }, 'تحویل چک ثبت شد 📤')
+   504→                  if (okRes) setDeliverOpen(false)
+   505→                })
+   506→              }
+   507→            >
+   508→              ثبت تحویل
+   509→            </Button>
+   510→          </div>
+   511→        </DialogContent>
+   512→      </Dialog>
+   513→
+   514→      {/* split dialog */}
+   515→      <SplitChequeDialog open={splitOpen} onOpenChange={setSplitOpen} cheque={c} holidays={holidays} onDone={onChanged} />
+   516→    </div>
+   517→  )
+   518→}
+   519→
+   520→// ================= split dialog =================
+   521→function SplitChequeDialog({
+   522→  open, onOpenChange, cheque, holidays, onDone,
+   523→}: {
+   524→  open: boolean
+   525→  onOpenChange: (v: boolean) => void
+   526→  cheque: ChequeRow
+   527→  holidays: Set<string>
+   528→  onDone: () => void
+   529→}) {
+   530→  const [parts, setParts] = React.useState<{ amount: string; dueDate: Date | null }[]>([
+   531→    { amount: '', dueDate: null },
+   532→    { amount: '', dueDate: null },
+   533→  ])
+   534→  const [saving, setSaving] = React.useState(false)
+   535→
+   536→  React.useEffect(() => {
+   537→    if (open) {
+   538→      const half = Math.floor(cheque.amount / 2)
+   539→      setParts([
+   540→        { amount: String(half), dueDate: null },
+   541→        { amount: String(cheque.amount - half), dueDate: null },
+   542→      ])
+   543→    }
+   544→  }, [open, cheque])
+   545→
+   546→  const sum = parts.reduce((s, p) => s + (Number(p.amount) || 0), 0)
+   547→  const diff = sum - cheque.amount
+   548→
+   549→  const submit = async () => {
+   550→    setSaving(true)
+   551→    try {
+   552→      await api('/api/cheques/split', {
+   553→        body: {
+   554→          id: cheque.id,
+   555→          parts: parts.map((p) => ({ amount: Number(p.amount), dueDate: p.dueDate ? p.dueDate.toISOString() : null })),
+   556→        },
+   557→      })
+   558→      toast({ title: `چک به ${toFaDigits(parts.length)} بخش تقسیم شد ✂️`, description: 'بخش‌های جدید در انتظار امضای مالک هستند' })
+   559→      onOpenChange(false)
+   560→      onDone()
+   561→    } catch (e) {
+   562→      toast({ title: 'خطا در تقسیم چک', description: e instanceof Error ? e.message : undefined, variant: 'destructive' })
+   563→    } finally {
+   564→      setSaving(false)
+   565→    }
+   566→  }
+   567→
+   568→  return (
+   569→    <Dialog open={open} onOpenChange={onOpenChange}>
+   570→      <DialogContent className="w-[95vw] max-w-lg max-h-[90vh] overflow-y-auto">
+   571→        <DialogHeader>
+   572→          <DialogTitle className="text-base">تقسیم چک {cheque.number}</DialogTitle>
+   573→          <DialogDescription className="text-xs">
+   574→            مبلغ اصلی: <span className="num font-bold">{money(cheque.amount)}</span> تومان — جمع بخش‌ها باید دقیقاً برابر باشد.
+   575→          </DialogDescription>
+   576→        </DialogHeader>
+   577→        <div className="space-y-2.5">
+   578→          {parts.map((p, i) => {
+   579→            const closed = p.dueDate ? isClosedDay(p.dueDate, holidays) : false
+   580→            return (
+   581→              <div key={i} className="rounded-xl border border-border p-3 space-y-2">
+   582→                <div className="flex items-center justify-between">
+   583→                  <p className="text-xs font-bold">بخش {toFaDigits(i + 1)}</p>
+   584→                  {parts.length > 2 && (
+   585→                    <Button variant="ghost" size="sm" className="h-8 text-xs text-pomegranate" onClick={() => setParts((prev) => prev.filter((_, j) => j !== i))}>
+   586→                      حذف
+   587→                    </Button>
+   588→                  )}
+   589→                </div>
+   590→                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+   591→                  <Input
+   592→                    value={p.amount}
+   593→                    onChange={(e) => setParts((prev) => prev.map((x, j) => (j === i ? { ...x, amount: e.target.value.replace(/[^\d.]/g, '') } : x)))}
+   594→                    inputMode="numeric"
+   595→                    placeholder="مبلغ (تومان)"
+   596→                    className="h-11 num"
+   597→                    aria-label={`مبلغ بخش ${i + 1}`}
+   598→                  />
+   599→                  <JalaliDatePicker
+   600→                    value={p.dueDate}
+   601→                    onChange={(d) => setParts((prev) => prev.map((x, j) => (j === i ? { ...x, dueDate: d } : x)))}
+   602→                    holidays={holidays}
+   603→                    allowClear={false}
+   604→                  />
+   605→                </div>
+   606→                {closed && (
+   607→                  <div className="flex flex-wrap items-center gap-2 rounded-lg bg-[#C9A227]/10 border border-[#C9A227]/40 px-2.5 py-2 text-[11px] text-[#8a6f3c]" role="alert">
+   608→                    <span className="font-bold">سررسید به تعطیلات می‌افتد؛ زودتر انتخاب کنید</span>
+   609→                    {p.dueDate && (
+   610→                      <Button
+   611→                        type="button"
+   612→                        variant="outline"
+   613→                        size="sm"
+   614→                        className="h-8 text-[11px]"
+   615→                        onClick={() => setParts((prev) => prev.map((x, j) => (j === i ? { ...x, dueDate: suggestOpenDay(p.dueDate!, holidays) } : x)))}
+   616→                      >
+   617→                        پیشنهاد: {formatJalali(suggestOpenDay(p.dueDate, holidays))}
+   618→                      </Button>
+   619→                    )}
+   620→                  </div>
+   621→                )}
+   622→              </div>
+   623→            )
+   624→          })}
+   625→        </div>
+   626→        <div className="flex items-center justify-between text-xs">
+   627→          <Button
+   628→            variant="outline"
+   629→            size="sm"
+   630→            className="touch-target"
+   631→            onClick={() => setParts((prev) => [...prev, { amount: '', dueDate: null }])}
+   632→            disabled={parts.length >= 6}
+   633→          >
+   634→            <Plus className="h-4 w-4" /> افزودن بخش
+   635→          </Button>
+   636→          <span className={cn('num font-bold', Math.abs(diff) <= 1 ? 'text-primary' : 'text-pomegranate')}>
+   637→            جمع: {money(sum)} / {money(cheque.amount)} {Math.abs(diff) > 1 && `(اختلاف ${money(diff)})`}
+   638→          </span>
+   639→        </div>
+   640→        <div className="flex justify-end gap-2">
+   641→          <Button variant="outline" size="sm" className="touch-target" onClick={() => onOpenChange(false)} disabled={saving}>انصراف</Button>
+   642→          <Button size="sm" className="touch-target font-bold" onClick={submit} disabled={saving || Math.abs(diff) > 1 || parts.some((p) => !Number(p.amount) || !p.dueDate)}>
+   643→            {saving && <Loader2 className="h-4 w-4 animate-spin" />} تقسیم قطعی
+   644→          </Button>
+   645→        </div>
+   646→      </DialogContent>
+   647→    </Dialog>
+   648→  )
+   649→}
+   650→
+   651→// ================= create cheque =================
+   652→function CreateChequeButton({
+   653→  holidays, onCreated,
+   654→}: {
+   655→  holidays: Set<string>
+   656→  onCreated: () => void
+   657→}) {
+   658→  const [open, setOpen] = React.useState(false)
+   659→  const [amount, setAmount] = React.useState('')
+   660→  const [payeeName, setPayeeName] = React.useState('')
+   661→  const [payeePhone, setPayeePhone] = React.useState('')
+   662→  const [dueDate, setDueDate] = React.useState<Date | null>(null)
+   663→  const [note, setNote] = React.useState('')
+   664→  const [orderQuery, setOrderQuery] = React.useState('')
+   665→  const [orderResults, setOrderResults] = React.useState<OrderLite[]>([])
+   666→  const [orderId, setOrderId] = React.useState<string | null>(null)
+   667→  const [isForOrder, setIsForOrder] = React.useState(true)
+   668→  const [saving, setSaving] = React.useState(false)
+   669→
+   670→  React.useEffect(() => {
+   671→    if (!open) return
+   672→    setAmount(''); setPayeeName(''); setPayeePhone(''); setDueDate(null); setNote(''); setOrderQuery(''); setOrderId(null)
+   673→  }, [open])
+   674→
+   675→  React.useEffect(() => {
+   676→    if (!open || orderQuery.trim().length < 2) { setOrderResults([]); return }
+   677→    const t = setTimeout(() => {
+   678→      api<OrderLite[]>(`/api/orders?q=${encodeURIComponent(orderQuery.trim())}`)
+   679→        .then((list) => setOrderResults(list.slice(0, 6)))
+   680→        .catch(() => setOrderResults([]))
+   681→    }, 300)
+   682→    return () => clearTimeout(t)
+   683→  }, [orderQuery, open])
+   684→
+   685→  const closed = dueDate ? isClosedDay(dueDate, holidays) : false
+   686→
+   687→  const submit = async () => {
+   688→    setSaving(true)
+   689→    try {
+   690→      await api('/api/cheques', {
+   691→        body: {
+   692→          amount: Number(amount),
+   693→          payeeName,
+   694→          payeePhone: payeePhone || undefined,
+   695→          dueDate: dueDate?.toISOString(),
+   696→          orderId: orderId ?? undefined,
+   697→          isForOrder,
+   698→          note: note || undefined,
+   699→        },
+   700→      })
+   701→      toast({ title: 'چک صادر شد و در انتظار امضای مالک است ✍️' })
+   702→      setOpen(false)
+   703→      onCreated()
+   704→    } catch (e) {
+   705→      toast({ title: 'خطا در صدور چک', description: e instanceof Error ? e.message : undefined, variant: 'destructive' })
+   706→    } finally {
+   707→      setSaving(false)
+   708→    }
+   709→  }
+   710→
+   711→  return (
+   712→    <>
+   713→      <Button className="touch-target font-bold" onClick={() => setOpen(true)}>
+   714→        <Plus className="h-4 w-4" /> صدور چک
+   715→      </Button>
+   716→      <Dialog open={open} onOpenChange={setOpen}>
+   717→        <DialogContent className="w-[95vw] max-w-lg max-h-[90vh] overflow-y-auto">
+   718→          <DialogHeader>
+   719→            <DialogTitle className="text-base">صدور چک جدید</DialogTitle>
+   720→            <DialogDescription className="text-xs">سررسید نباید جمعه یا روز تعطیل باشد.</DialogDescription>
+   721→          </DialogHeader>
+   722→          <div className="space-y-3">
+   723→            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+   724→              <div>
+   725→                <label className="text-xs font-bold mb-1.5 block">مبلغ (تومان)</label>
+   726→                <Input value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} inputMode="numeric" className="h-11 num" aria-label="مبلغ چک" />
+   727→              </div>
+   728→              <div>
+   729→                <label className="text-xs font-bold mb-1.5 block">تلفن گیرنده</label>
+   730→                <Input value={payeePhone} onChange={(e) => setPayeePhone(e.target.value)} inputMode="tel" className="h-11 num" aria-label="تلفن گیرنده" />
+   731→              </div>
+   732→            </div>
+   733→            <div>
+   734→              <label className="text-xs font-bold mb-1.5 block">نام گیرنده</label>
+   735→              <Input value={payeeName} onChange={(e) => setPayeeName(e.target.value)} className="h-11" aria-label="نام گیرنده" />
+   736→            </div>
+   737→            <div>
+   738→              <label className="text-xs font-bold mb-1.5 block">تاریخ سررسید</label>
+   739→              <JalaliDatePicker value={dueDate} onChange={setDueDate} holidays={holidays} allowClear={false} />
+   740→              <p className="text-[11px] text-muted-foreground mt-1">{dueDate ? formatJalaliFull(dueDate) : 'انتخاب نشده'}</p>
+   741→            </div>
+   742→            {closed && dueDate && (
+   743→              <div className="flex flex-wrap items-center gap-2 rounded-xl bg-[#C9A227]/10 border border-[#C9A227]/40 px-3 py-2.5 text-xs text-[#8a6f3c]" role="alert">
+   744→                <span className="font-bold">سررسید به تعطیلات می‌افتد؛ زودتر انتخاب کنید</span>
+   745→                <Button
+   746→                  type="button"
+   747→                  variant="outline"
+   748→                  size="sm"
+   749→                  className="h-8 text-[11px]"
+   750→                  onClick={() => setDueDate(suggestOpenDay(dueDate, holidays))}
+   751→                >
+   752→                  پیشنهاد: {formatJalali(suggestOpenDay(dueDate, holidays))}
+   753→                </Button>
+   754→              </div>
+   755→            )}
+   756→            <div>
+   757→              <label className="text-xs font-bold mb-1.5 block">لینک به سفارش (اختیاری)</label>
+   758→              {orderId ? (
+   759→                <div className="flex items-center justify-between rounded-xl border border-primary/40 bg-primary/5 px-3 py-2 text-xs">
+   760→                  <span className="num font-bold">{orderResults.find((o) => o.id === orderId)?.code ?? 'سفارش انتخاب‌شده'}</span>
+   761→                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setOrderId(null)}>حذف لینک</Button>
+   762→                </div>
+   763→              ) : (
+   764→                <>
+   765→                  <Input value={orderQuery} onChange={(e) => setOrderQuery(e.target.value)} placeholder="جستجو با کد سفارش…" className="h-11 num" aria-label="جستجوی سفارش" />
+   766→                  {orderResults.length > 0 && (
+   767→                    <div className="mt-1.5 rounded-xl border border-border divide-y divide-border max-h-36 overflow-y-auto">
+   768→                      {orderResults.map((o) => (
+   769→                        <button
+   770→                          key={o.id}
+   771→                          type="button"
+   772→                          onClick={() => { setOrderId(o.id); setIsForOrder(true) }}
+   773→                          className="w-full text-right px-3 py-2 text-xs hover:bg-accent touch-target flex items-center justify-between"
+   774→                        >
+   775→                          <span className="num font-bold">{o.code}</span>
+   776→                          <span className="text-muted-foreground">{o.providerName} • <span className="num">{money(o.finalAmount)}</span></span>
+   777→                        </button>
+   778→                      ))}
+   779→                    </div>
+   780→                  )}
+   781→                </>
+   782→              )}
+   783→            </div>
+   784→            <div className="flex items-center justify-between rounded-xl border border-border px-3 py-2.5">
+   785→              <span className="text-xs font-bold">چک بابت سفارش است</span>
+   786→              <Switch checked={isForOrder} onCheckedChange={setIsForOrder} aria-label="چک بابت سفارش" />
+   787→            </div>
+   788→            <Textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="یادداشت (اختیاری)…" className="min-h-16" aria-label="یادداشت چک" />
+   789→          </div>
+   790→          <div className="flex justify-end gap-2">
+   791→            <Button variant="outline" size="sm" className="touch-target" onClick={() => setOpen(false)} disabled={saving}>انصراف</Button>
+   792→            <Button size="sm" className="touch-target font-bold" onClick={submit} disabled={saving || !Number(amount) || !payeeName.trim() || !dueDate || closed}>
+   793→              {saving && <Loader2 className="h-4 w-4 animate-spin" />} صدور چک
+   794→            </Button>
+   795→          </div>
+   796→        </DialogContent>
+   797→      </Dialog>
+   798→    </>
+   799→  )
+   800→}
+   801→
+   802→// ================= create payment =================
+   803→function CreatePaymentButton({ onCreated }: { onCreated: () => void }) {
+   804→  const [open, setOpen] = React.useState(false)
+   805→  const [amount, setAmount] = React.useState('')
+   806→  const [type, setType] = React.useState('CASH_ON_DELIVERY')
+   807→  const [receiptNo, setReceiptNo] = React.useState('')
+   808→  const [posReceiptNo, setPosReceiptNo] = React.useState('')
+   809→  const [note, setNote] = React.useState('')
+   810→  const [orderQuery, setOrderQuery] = React.useState('')
+   811→  const [orderResults, setOrderResults] = React.useState<OrderLite[]>([])
+   812→  const [orderId, setOrderId] = React.useState<string | null>(null)
+   813→  const [saving, setSaving] = React.useState(false)
+   814→
+   815→  React.useEffect(() => {
+   816→    if (!open) return
+   817→    setAmount(''); setReceiptNo(''); setPosReceiptNo(''); setNote(''); setOrderQuery(''); setOrderId(null); setType('CASH_ON_DELIVERY')
+   818→  }, [open])
+   819→
+   820→  React.useEffect(() => {
+   821→    if (!open || orderQuery.trim().length < 2) { setOrderResults([]); return }
+   822→    const t = setTimeout(() => {
+   823→      api<OrderLite[]>(`/api/orders?q=${encodeURIComponent(orderQuery.trim())}`)
+   824→        .then((list) => setOrderResults(list.slice(0, 6)))
+   825→        .catch(() => setOrderResults([]))
+   826→    }, 300)
+   827→    return () => clearTimeout(t)
+   828→  }, [orderQuery, open])
+   829→
+   830→  const submit = async () => {
+   831→    setSaving(true)
+   832→    try {
+   833→      await api('/api/payments', {
+   834→        body: {
+   835→          amount: Number(amount),
+   836→          type,
+   837→          receiptNo: receiptNo || undefined,
+   838→          posReceiptNo: posReceiptNo || undefined,
+   839→          note: note || undefined,
+   840→          orderId: orderId ?? undefined,
+   841→        },
+   842→      })
+   843→      toast({ title: 'پرداخت ثبت شد ✅' })
+   844→      setOpen(false)
+   845→      onCreated()
+   846→    } catch (e) {
+   847→      toast({ title: 'خطا در ثبت پرداخت', description: e instanceof Error ? e.message : undefined, variant: 'destructive' })
+   848→    } finally {
+   849→      setSaving(false)
+   850→    }
+   851→  }
+   852→
+   853→  return (
+   854→    <>
+   855→      <Button variant="outline" className="touch-target" onClick={() => setOpen(true)}>
+   856→        <Plus className="h-4 w-4" /> ثبت پرداخت
+   857→      </Button>
+   858→      <Dialog open={open} onOpenChange={setOpen}>
+   859→        <DialogContent className="w-[95vw] max-w-md max-h-[90vh] overflow-y-auto">
+   860→          <DialogHeader>
+   861→            <DialogTitle className="text-base">ثبت پرداخت جدید</DialogTitle>
+   862→            <DialogDescription className="text-xs">پرداخت‌های نقدی/انتقالی و رسیدها را ثبت کنید.</DialogDescription>
+   863→          </DialogHeader>
+   864→          <div className="space-y-3">
+   865→            <div>
+   866→              <label className="text-xs font-bold mb-1.5 block">مبلغ (تومان)</label>
+   867→              <Input value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} inputMode="numeric" className="h-11 num" aria-label="مبلغ پرداخت" />
+   868→            </div>
+   869→            <div>
+   870→              <label className="text-xs font-bold mb-1.5 block">نوع پرداخت</label>
+   871→              <div className="grid grid-cols-2 gap-1.5">
+   872→                {PAYMENT_TYPES.map((t) => (
+   873→                  <button
+   874→                    key={t.key}
+   875→                    type="button"
+   876→                    aria-pressed={type === t.key}
+   877→                    onClick={() => setType(t.key)}
+   878→                    className={cn('rounded-xl border py-2.5 text-xs font-bold touch-target', type === t.key ? 'border-primary bg-primary/10 text-primary' : 'bg-card')}
+   879→                  >
+   880→                    {t.label}
+   881→                  </button>
+   882→                ))}
+   883→              </div>
+   884→            </div>
+   885→            <div className="grid grid-cols-2 gap-2">
+   886→              <div>
+   887→                <label className="text-xs font-bold mb-1.5 block">شماره رسید</label>
+   888→                <Input value={receiptNo} onChange={(e) => setReceiptNo(e.target.value)} className="h-11 num" aria-label="شماره رسید" />
+   889→              </div>
+   890→              <div>
+   891→                <label className="text-xs font-bold mb-1.5 block">رسید POS</label>
+   892→                <Input value={posReceiptNo} onChange={(e) => setPosReceiptNo(e.target.value)} className="h-11 num" aria-label="رسید POS" />
+   893→              </div>
+   894→            </div>
+   895→            <div>
+   896→              <label className="text-xs font-bold mb-1.5 block">لینک به سفارش (اختیاری)</label>
+   897→              {orderId ? (
+   898→                <div className="flex items-center justify-between rounded-xl border border-primary/40 bg-primary/5 px-3 py-2 text-xs">
+   899→                  <span className="num font-bold">{orderResults.find((o) => o.id === orderId)?.code ?? 'سفارش انتخاب‌شده'}</span>
+   900→                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setOrderId(null)}>حذف لینک</Button>
+   901→                </div>
+   902→              ) : (
+   903→                <Input value={orderQuery} onChange={(e) => setOrderQuery(e.target.value)} placeholder="جستجو با کد سفارش…" className="h-11 num" aria-label="جستجوی سفارش" />
+   904→              )}
+   905→              {orderId === null && orderResults.length > 0 && (
+   906→                <div className="mt-1.5 rounded-xl border border-border divide-y divide-border max-h-32 overflow-y-auto">
+   907→                  {orderResults.map((o) => (
+   908→                    <button
+   909→                      key={o.id}
+   910→                      type="button"
+   911→                      onClick={() => setOrderId(o.id)}
+   912→                      className="w-full text-right px-3 py-2 text-xs hover:bg-accent touch-target flex items-center justify-between"
+   913→                    >
+   914→                      <span className="num font-bold">{o.code}</span>
+   915→                      <span className="text-muted-foreground num">{money(o.finalAmount)}</span>
+   916→                    </button>
+   917→                  ))}
+   918→                </div>
+   919→              )}
+   920→            </div>
+   921→            <Textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="یادداشت (اختیاری)…" className="min-h-16" aria-label="یادداشت پرداخت" />
+   922→          </div>
+   923→          <div className="flex justify-end gap-2">
+   924→            <Button variant="outline" size="sm" className="touch-target" onClick={() => setOpen(false)} disabled={saving}>انصراف</Button>
+   925→            <Button size="sm" className="touch-target font-bold" onClick={submit} disabled={saving || !Number(amount)}>
+   926→              {saving && <Loader2 className="h-4 w-4 animate-spin" />} ثبت پرداخت
+   927→            </Button>
+   928→          </div>
+   929→        </DialogContent>
+   930→      </Dialog>
+   931→    </>
+   932→  )
+   933→}
+   934→

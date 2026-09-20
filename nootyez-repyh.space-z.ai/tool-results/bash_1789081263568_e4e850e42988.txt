@@ -1,0 +1,251 @@
+501 /home/z/my-project/worklog.md
+
+Work Log:
+- Read all contracts first (worklog.md, kit.tsx, jalali.ts, types.ts, api.ts, store.ts, JalaliCalendar.tsx) and CONFIRMED response shapes from the actual routes: /api/dashboard (counts/ordersPerDay{date,count,total}/spendPerDay/topSuppliers/lowStockItems/recentEvents{orderId,code included→clickable}/staffPoints/holidays), GET /api/orders (list items = {qty,deliveredQty,confirmedQty,unitCost} + _count.items, supplier {id,name,paymentTerms,chequeDays} — NO productId/name in list items), GET/PATCH /api/orders/[id] (PATCH returns fresh full order), POST /api/orders, GET /api/suppliers, GET /api/products?limit=500.
+- src/components/platform/DashboardSection.tsx ('use client', default export, {user}: {user: PUser}): GET /api/dashboard once + 30s polling; role-aware greeting hero ("سلام {firstName} 👋", fmtJalaliLong today, gold points chip, subtitle varies by role via hasRole: GM/OWNER management overview, ACCOUNTANT financial queue, DELIVERY_RECEIVER/INVENTORY_SUPERVISOR today's deliveries, PM/OM/IT variants); 6 StatCards in 2-col mobile/4-col desktop grid (ShoppingCart→orders, Truck→deliveries, Package→products rose if >5, CreditCard→payments gold, CheckSquare→tasks, Users→crm), all clickable via setView; recharts BarChart ordersPerDay (fill #5F8F55, radius [6,6,0,0]) + AreaChart spendPerDay (stroke #B8860B, gradient fill, Y fmtMoneyShort) in ResponsiveContainer h-64 cards; Top suppliers donut PieChart (colors ['#3E6B4A','#93C572','#B8860B','#DAA520','#7A5C2E'], innerRadius 52, Legend) + staff leaderboard top-5 (🥇🥈🥉 medals, Avatar, gold #1 highlight) with max-h-72 pz-scroll; bottom row: low-stock list (StockBadge + stock/minStock colored via stockDot, rows → setView('products')), recent activity feed (userName + action label + detail + TimeAgo, order code pz-barcode chip → openOrder(orderId) when payload has orderId — it does), upcoming holidays (fmtJalali, rose Heart). SectionHeader icon LayoutDashboard; olive/gold/cream only; ≥44px targets; Persian + English labels.
+- src/components/platform/OrdersSection.tsx: modes list/detail/new in one component.
+  LIST: SectionHeader + PrimaryButton "سفارش جدید" gated by hasRole GM/PM/OM/IT; Tabs [All active(→?active=1), DRAFT, SUBMITTED, APPROVED, RECEIVED, CONFIRMED, DONE] via ORDER_STATUS_LABELS; order cards grid (md:2/xl:3) with pz-barcode code, supplier, StatusBadge, payment badge, receiving date fmtJalali + red "معوق | Overdue" when APPROVED & date<today, item count, fmtMoney total, delivered/confirmed progress bar (from list items qty/deliveredQty/confirmedQty), TimeAgo.
+  DETAIL: fetches /api/orders/[id]; back button; header (code/supplier/StatusBadge/payment); PATCH-action helper reuses the fresh order returned by API; vertical timeline (dots, action labels, userName, detail, fmtJalaliTime); items TableWrap with pz-barcode barcodes, qty, delivered/confirmed columns rendered only when present, unitCost/sellPrice/line total ((finalCost??unitCost)*(confirmedQty??deliveredQty??qty)), per-item status chip OK/MISSING/REJECTED/PENDING; totals panel subtotal/VAT(٪ computed, 9 fallback)/discount/total Money; amber correction box when order.correction; role-aware actions: DRAFT/SUBMITTED+creator|GM/PM/OM/IT → edit (opens wizard prefilled)/submit/cancel(confirm); SUBMITTED+GM → approve/reject(window.prompt reason)/cancel; APPROVED/RECEIVED/CONFIRMED+GM/PM/OM → اصلاحیه modal → PATCH action 'correct'; CONFIRMED+ACCOUNTANT → GoldButton downloadFile(`/api/export/order/${id}?userId=`, `${code}.xls`) + 'ثبت نهایی/بستن سفارش' → PATCH 'done'; RECEIVED+INVENTORY_SUPERVISOR → setView('deliveries').
+  WIZARD (new + edit DRAFT/SUBMITTED): full-screen fixed inset-0 z-50 bg-[#FBF9F3] with sticky gradient header, 1→2→3 step indicator (clickable back on desktop + mobile dots) and sticky footer; fetches /api/suppliers + /api/products?limit=500 once; STEP1 supplier search + cards (kind badge, paymentTerms badge, chequeDays 'چک ۴۵ روزه', phone toFaDigits, company chips, product count) with selected highlight; STEP2 product search, that supplier's products first + "سایر تأمین‌کننده‌ها" divider section, cards with ProductImage, name+nameFa, pz-barcode, sellPrice, remaining count colored via stockDot, big 44px +/− steppers with qty badge, Clock GhostButton → history Modal: fetches /api/orders?active=1 per open; since LIST items lack productId (verified in route) it falls back per contract to that product's supplier's past orders (code/date/item-count/StatusBadge rows, "سابقه‌ای نیست" empty state); STEP3 JalaliDateField (default tomorrow addDaysISO(todayISO(),1), minDate today), payment pills CASH/CHEQUE/MIXED defaulting from supplier.paymentTerms (validPayment), note textarea, items summary with qty steppers + line totals, subtotal + VAT 9% + total; footer 'ذخیره پیش‌نویس' (GhostButton) + 'ثبت و ارسال برای تایید' (PrimaryButton) → POST /api/orders {supplierId,createdById,receivingDate,paymentType,note,status,items[{productId,name,barcode,qty,unitCost,sellPrice}]} or PATCH {action:'update', items(with existing ids),note,receivingDate,paymentType,userId} + auto 'submit' when a DRAFT edit is submitted; sonner toasts on success/error; sonner <Toaster> rendered (layout only mounts the radix Toaster, so sonner toasts need it).
+- Store wiring: watched newOrderSignal with ref-guard (ignores persisted initial value) → opens wizard; consumed focusOrderId in effect → opens detail then useApp.setState({focusOrderId:null}) to clear; back from detail refreshes the list.
+- Verification: bun run lint → 0 errors (2 pre-existing warnings in Login.tsx/kit.tsx — other files, untouched); bunx tsc --noEmit → no errors in my two files (fixed one TS5076 ??/|| mixing in my file; remaining tsc errors are in examples/, skills/, Header.tsx — other agents' files). No files outside my two + worklog touched; no new packages; no test code.
+
+Deviations / notes:
+- Product-history modal uses the supplier's-orders fallback (contract-sanctioned) because GET /api/orders list items don't include productId; switching to a per-order detail scan was ruled out as N+1 fetches.
+- Correction button also enabled for RECEIVED/CONFIRMED (GM/PM/OM) — the API's 'correct' action explicitly allows APPROVED/RECEIVED/CONFIRMED; spec only named APPROVED.
+- Edit button additionally shown for SUBMITTED orders (creator or managers) since PATCH 'update' allows DRAFT+SUBMITTED; submit button only for DRAFT.
+- VAT percent label on detail is computed from order.vat/subtotal with 9% fallback (API stores vatPercent from Settings).
+- Wizard keeps existing OrderItem ids on edit so PATCH 'update' updates rather than delete+recreate rows.
+- Cancel allowed for DRAFT/SUBMITTED/APPROVED by creator-or-managers (API blocks only DONE/CANCELLED).
+
+Stage Summary:
+- Task 5-a complete: DashboardSection + OrdersSection implemented per contract against the live API shapes, lint+tsc clean for my files, ready for page.tsx shell integration (sections take {user} prop only).
+
+---
+Task ID: 6 + 7
+Agent: main (integration & verification)
+Task: Integrate all sections, lint/typecheck, run dev server, E2E verify golden paths via agent-browser
+
+Work Log:
+- Fixed Header.tsx type error (PUser prop) — project tsc-clean for app code; bun run lint: 0 errors 0 warnings (auto-fixed 2 unused-directive warnings).
+- Started dev server (port 3000) — GET / 200, no runtime errors in dev.log.
+- E2E verified via agent-browser:
+  * Login screen renders (paisley design); staff grid + PIN pad works (fixed login response-shape bug: API returns user directly, Login.tsx now handles both wrapped/bare shapes).
+  * Mrs. Lotfi (GM, PIN 2222): dashboard renders fully (stat cards, recharts bar/area/donut, leaderboard, low-stock, activity, holidays). Fixed empty-holidays by adding 1405–1406 holidays (2026-11-04 .. 2027-06-24) since sandbox clock = Sep 2026.
+  * Quick "سفارش جدید" header button + wizard: supplier cards w/ companies/terms → product cards w/ colored remaining counts + qty steppers + history button → review w/ Jalali date (default tomorrow), payment pills, VAT — saved HZ-1008 DRAFT via UI; submitted + GM-approved via UI (DRAFT→SUBMITTED→APPROVED verified via API).
+  * Mr. Mohammadi (inv, PIN 5555): role-gated nav correct; Deliveries confirm sheet (barcode scan field, qty/finalCost, OK/MISSING/REJECTED) → HZ-1004 → CONFIRMED via UI.
+  * Mrs. Darvishi (accountant, PIN 4444): Accounting queue shows CONFIRMED orders; XLS export verified via curl (HTTP 200, CDFV2 Excel, 4608 bytes for HZ-1003 id=15); Mark Done via 2-step Holoo reminder modal → HZ-1003 DONE.
+  * Cheque flow (GM): New Cheque modal → picked ۱۳ آبان ۱۴۰۵ → holiday warning + earlier-date suggestion chips shown; applied "۱ روز قبل" → ۱۲ آبان; order select auto-filled amount; submitted → appears in "در انتظار تایید مالک".
+  * Owner (Javad Norouzi, PIN 1111): Payments shows "مناسب تایید آقای نوروزی" section w/ big approve/reject; approved cheque → APPROVED verified.
+  * Tasks, Messages (privacy banner), Community wall (composer, pinned), Products (info-center banner + category chips + stock badges), Profile (level جوانه, progress, leaderboard), Suppliers (kind/terms/company chips), Warehouse (request cards + tabs) all render and are interactive.
+- Note: user IDs are 49-64 after re-seeds (autoincrement) — seed pins unchanged (owner 1111, GM 2222, IT/OM 1010, PM 3333, accountant 4444, inventory 5555, Irannejhad 6666).
+
+Stage Summary:
+- Platform is fully working end-to-end: order lifecycle (Draft→Submit→Approve→Receive→Confirm→Export→Done), cheque pipeline w/ Jalali calendar + holiday guard + owner approval, tasks/SOPs/community/notes/messages/CRM/planogram/warehouse/products-import/audit/admin all implemented.
+- All 18 sections + shell + 33 API routes lint-clean, tsc-clean, browser-verified.
+
+---
+Task ID: cron-review-20260911 (round 2)
+Agent: webDevReview (main)
+Task: Status assessment, QA via agent-browser, bug fixes + new features (Reports, Briefing, Print PO)
+
+Work Log:
+- STATUS ASSESSMENT: platform stable — server 200, lint/tsc clean, worklog reviewed. Previous golden paths intact.
+- QA PASS (agent-browser): fresh session login OK; dashboard fully rendered; found 2 real issues:
+  1) Greeting bidi bug: "Mrs. Lotfi" Latin name rendered as "Mrs. سلام 👋" garbage in RTL hero.
+  2) HTML hydration error: nested <button> inside <button> in dashboard briefing (dev overlay "2 Issues"; console: "In HTML, button cannot be a descendant of button").
+- FIXES:
+  * Greeting now prefers the Persian role-name in parentheses (name.match(/\(([^)]+)\)/)) → "سلام مدیر عامل 👋" with dir="rtl" (fallback to Latin first name). DashboardSection.tsx.
+  * BriefingCard deliveries panel: outer <button> → div(role=button, tabIndex, onKeyDown) so the inner order-code <button> is legal HTML. Console re-checked: hydration error GONE.
+- NEW FEATURE 1 — Reports & Analytics (management + accountant + PM):
+  * GET /api/reports: delivery performance (avg receive/confirm lag hrs, on-time %), supplier scorecard (spend, orders, missing/rejected issue-rate), 6-month DONE-spend buckets, staff activity from audit log + points (30d), product margin analysis mirroring Mrs. Darvishi's Excel logic (green ≥25%, yellow ≥10%, red <10%) with top-12 + at-risk lists, order pipeline funnel, financial snapshot (30d spend, est VAT, open commitments).
+  * ReportsSection.tsx: KPI StatCards, Jalali-labeled monthly spend BarChart, colored funnel bars, scorecard table with issue-rate badges, margin lists (Excel color semantics), staff activity grid. Wired: store ViewKey 'reports', nav item 'گزارش و تحلیل' (MGMT+ACCOUNTANT+PM), Sidebar icon BarChart3, page.tsx switch. Browser-verified end to end.
+- NEW FEATURE 2 — Today Briefing card ("بریفینگ امروز"): gold-gradient dashboard card composing (client-side, no API change): inbound deliveries (code chip → openOrder, supplier, معوق! badge), cheques due within 7d (amount, Jalali due, day-count chip colored), urgent/high/mine tasks (priority dots). Hidden entirely when all empty. Role-agnostic (everyone gets their own view; tasks filtered by assignedToId).
+- NEW FEATURE 3 — Print PO: order detail "چاپ سفارش | Print PO" button → hidden .pz-print-only sheet (brand header, code, supplier, Jalali dates, items table with barcodes/qty/cost/line totals, VAT-aware grand total, note/correction, signature blocks) + @media print CSS (visibility isolation, page-break rules). Browser-verified sheet renders (3 rows incl. totals).
+- Also: fixed pre-existing /api/reports TS error during development (pointsByUser map).
+- Verification: bun run lint 0 errors/0 warnings; tsc clean (app code); agent-browser: dashboard + reports + print sheet verified; console free of hydration/errors.
+
+Stage Summary:
+- 3 new features shipped (Reports & Analytics API+UI, Today Briefing, Print PO) + 2 bugs fixed (RTL greeting, nested-button hydration).
+- No schema changes; no breaking API changes; all prior golden paths still working.
+
+Unresolved / next-round recommendations (priority order):
+1) RTL polish sweep: consider dir="rtl" on the shell root + mirrored sidebar for full Persian-first layout (sections already self-RTL).
+2) Sales-report gap: platform tracks orders, not register sales — when Holoo export includes sales, add /api/reports/sales for SPHL per salesperson.
+3) Notifications: add browser Notification API opt-in for managers (deliveries/cheque events) alongside in-app bell.
+4) Planogram: print/export planogram as image for floor staff.
+5) Consider explicit 'sessions' or JWT if deploying beyond trusted LAN.
+
+---
+Task ID: 2-c
+Agent: full-stack-developer
+Task: Planogram print sheet + styling pass
+
+Work Log:
+- Read worklog.md, PlanogramSection.tsx (all 507 lines), OrdersSection print pattern (button ~L399, sheet ~L635), globals.css `.pz-print-only` + `@media print` block (L222-248), `ProductT` shape in src/lib/types.ts, and GET /api/planograms route to confirm layout JSON shape.
+- Confirmed layout shape: `{ shelves: [{ label: string, slots: [{ productId: number, facing: number }] }] }` — stored as JSON string in DB, returned parsed by API, re-normalized client-side via existing `normalizeLayout()`.
+- Added "چاپ | Print" GhostButton (Printer icon, min-h-[44px], title attr) in the planogram VIEW mode toolbar next to ویرایش/بازگشت; triggers `setPrintOpen(true)` + `setTimeout(() => window.print(), 120)` — exactly mirroring OrdersSection.
+- Added `{printOpen && (<div className="pz-print-only" dir="rtl">…)}` print sheet inside the view branch (global print CSS already isolates it — zero globals.css changes needed): gold "هایپر زیتون" (#8A6508) brand header + "چیدمان قفسه | Planogram", planogram name + Jalali date, meta line (status label via PG_STATUS, assigned merchandiser name or —, shelf count), per-shelf heading + compact print table (ردیف / کالا name+nameFa / بارکد LTR mono / فیصینگ / موجودی, all Persian digits, `1px solid #999` borders, light olive `#EAF0E2` header row, `pageBreakInside: avoid` per shelf), footer with "امضا | Signature: ______" + Jalali printed timestamp (fmtJalaliTime). Missing products render "—" gracefully via existing `pmap`.
+- Print state resets when leaving the view ("همه پلانوگرام‌ها" button now also setPrintOpen(false)).
+- Styling pass: shelf visual card padding p-3→p-4; slot cards get `transition hover:-translate-y-0.5 hover:shadow-md`; planogram list cards get new gold-tinted chip «مجموع فیصینگ N» alongside existing قفسه/کالا counts (total facings = Σ slot.facing).
+- Verified: `bun run lint` → 0 errors; `bunx tsc --noEmit` → no errors from this file (only pre-existing examples/skills errors); `curl -s http://localhost:3000/` → HTTP 200 with HTML; dev.log shows GET /api/planograms 200 + GET / 200, no compile errors.
+
+Stage Summary:
+- Floor staff can now print a shelf-layout sheet: open planogram → مشاهده → «چاپ | Print» → window.print() prints only the `.pz-print-only` sheet (screen UI untouched; existing global @media print visibility-isolation CSS reused verbatim — globals.css NOT modified). Sheet is Persian-first RTL, olive/gold branded, one compact table per shelf with barcode/facing/stock columns, signature + Jalali timestamp footer. Additive diffs only; no working code restructured. Closes worklog backlog item "4) Planogram: print/export planogram as image for floor staff" (as print sheet).
+
+---
+Task ID: 2-b
+Agent: full-stack-developer
+Task: Sales & SPHL module (schema, API, CRM tab, seed)
+
+Work Log:
+- prisma/schema.prisma: appended `Sale` model (productId?, name, qty, unitPrice, total, customerId?, customerName?, channel WALKIN|PREORDER, salespersonId, cashierId?, preOrderId?, note?, createdAt) — no relations, manual user joins like PreOrder. `bun run db:push` OK (client v6.19.2 regenerated).
+- NEW src/app/api/sales/route.ts (dynamic force-dynamic): GET /api/sales?from=&to=&salespersonId=&limit=200 (default 200, max 1000) → {sales (createdAt desc, each + salesperson{id,name,color} & nullable cashier{id,name}), summary}; from/to bound the list only, salespersonId filters both list and summary. POST {userId actor, productId?, name, qty, unitPrice, salespersonId, cashierId?, customerId?, customerName?, channel?, note?} → validates name/qty>0/unitPrice≥0/salesperson exists, total=qty×unitPrice, creates sale, PointsLog +2 'ثبت فروش | Sale logged' (awardedById=actor) + user.points increment, audit 'sale.create' entity Sale, returns {sale: withUsers}. DELETE /api/sales?id=&userId= → deletes, compensating PointsLog -2 'حذف فروش | Sale removed' + user.points=max(0,points-2), audit 'sale.delete', returns {ok:true}. Summary computed server-side: today (server-calendar day start), week 7d, month 30d via 3 aggregates + one lightweight 30d rows query → byDay 14 buckets (missing days 0, local day key YYYY-MM-DD), bySalesperson SPHL = total÷(shiftHours × distinctDaysWorked, min 1 day) sorted desc by total, sphlOverall = monthTotal÷(activeSellers × shiftHours × 30) round min 0, topProducts top 8 by total. shiftHours read from Setting key 'shiftHours' (parseFloat, fallback 8).
+- src/app/api/preorders/route.ts: 'done' action now auto-creates Sale rows (guarded by db.sale.count({preOrderId})===0 idempotency check), parsing po.items JSON [{productId,name,qty,sellPrice}] → Sale{channel:'PREORDER', cashierId: userId||po.cashierId, preOrderId, customerId/customerName copied}; audit detail appended '— N قلم فروش خودکار ثبت شد'. Minimal diff inside the existing 'done' case only.
+- src/components/platform/CrmSection.tsx: added third tab 'فروش و SPHL' (key 'sales', default tab unchanged) rendering new SalesTab{user}: 4 StatCards (امروز/۷روز/۳۰روز Money + SPHL toFaDigits+' تومان/ساعت', gold/olive tones); quick-log form (product search dropdown over cached /api/products?limit=500 with focus/blur handling, pick → name+unitPrice prefilled from sellPrice, 44px qty stepper min 1, editable unitPrice, salesperson select from /api/users filtered to active SALESPERSON/CASHIER via roles.includes — locked to self for non-management [OWNER/GM/OM/IT_ADMIN], self auto-added to options if missing, channel pills حضوری/پیش‌فروش, optional customer name + note, live total, PrimaryButton submit → POST /api/sales with userId=user.id + cashierId=user.id, toast 'فروش ثبت شد ✓', validation via error toasts); recharts BarChart of byDay (dir='ltr' wrapper, gold #DAA520 bars radius [6,6,0,0], olive #5F7A4E axis labels, Jalali 'JD Month' tick labels via isoToJalali, fmtMoneyShort YAxis, fmtMoney tooltip) with 14-day sum badge; SPHL leaderboard grid (sm:2/lg:3) sorted desc by total — Avatar+name+Money total+count+SPHL badge, top card gold ring + 'برترین 🏆' gold badge, others olive SPHL badge; today's sales list (max-h-96 overflow-y-auto pz-scroll): avatar, name, channel badge (حضوری olive / پیش‌فروش gold), qty×unitPrice (fmtMoney), total Money, salesperson, fmtJalaliTime, two-step delete (🗑 → 'مطمئنی؟ حذف' DangerButton, 3.5s reset) gated to salesperson/actor(cashierId)/management → api.del + reload + info toast. Loading via kit Loading, EmptyState for no-sales/no-today, dir='rtl' root, all ≥44px targets, olive/gold/cream only.
+- NEW scripts/seed-sales.ts: PrismaClient direct setup (like prisma/seed.ts), idempotent guard (skips if Sale count > 50 — verified by re-run), sellers resolved BY ROLE from active users (SALESPERSON|CASHIER → 6 found: Irannejhad, Mrs. Mohammadi, Mrs. Sharifi, Ms. Arabnejhad, Ms. Yadegari, Ms. Saadi), first 20 active products with sellPrice>0, 180 sales over last 30 days (hours 9-20, future-clamped for today, qty 1-4, unitPrice=sellPrice, ~15% customerName), channel WALKIN, plus Setting upsert shiftHours='8'. Ran once: '✅ Seeded 180 sales across 6 sellers (20 products) + Setting shiftHours=8'.
+- Dev-server note: the running server held a stale in-memory PrismaClient (created pre-db:push → db.sale undefined, 500s). Fixed by briefly touching next.config.ts to trigger Next dev's native config-change auto-restart, then restoring the file byte-identical (net zero diff; 2 restarts logged). No other files touched.
+- Verification: bun run lint → 0 errors 0 warnings; bunx tsc --noEmit → only 4 pre-existing errors in examples/ + skills/ (not mine). curl against live server: GET /api/sales (summary correct), POST (+68000 sale id 181, points 65→67, todayCount 7→8), DELETE (points 67→65, todayTotal back to 731000, count 180), audit rows 'sale.create'/'sale.delete' with actor userName; preorder #1 PENDING→prepare→done auto-created 2 PREORDER sales (ids 182-183, preOrderId=1, cashier=actor) and re-done did NOT duplicate (guard OK); GET /api/preorders intact; GET / 200, dev.log clean post-restart.
+
+Stage Summary:
+- Sales & SPHL module live end-to-end. GET /api/sales response shape for downstream agents:
+{
+  "sales": [ { id, productId, name, qty, unitPrice, total, customerId, customerName, channel: 'WALKIN'|'PREORDER', salespersonId, cashierId, preOrderId, note, createdAt, salesperson: {id,name,color}|null, cashier: {id,name,color}|null } ],  // createdAt desc, limit default 200
+  "summary": {
+    "todayTotal": 731000,       // server-calendar-day sum (rounded)
+    "todayCount": 7,
+    "weekTotal": 26212000,      // last 7 days
+    "monthTotal": 76096000,     // last 30 days
+    "count": 180,               // 30d invoice count
+    "byDay": [ { "day": "2026-08-28", "total": 3214000 } x14 ],   // oldest→today, missing days 0, local day key
+    "bySalesperson": [ { "userId": 63, "name": "Ms. Yadegari (فروشنده)", "color": "#C2410C", "total": 20350000, "count": 46, "sphl": 97837 } ],  // sorted desc by total; sphl = round(total / (shiftHours × distinctDaysWorked))
+    "sphlOverall": 55134,       // round(monthTotal / (activeSellers × shiftHours × 30)), min 0
+    "topProducts": [ { "name": "…", "qty": 12, "total": 408000 } x≤8 ]  // 30d, sorted desc by total
+  }
+}
+- from/to params filter the sales LIST only; salespersonId filters list + summary. Preorder 'done' now feeds Sales automatically (channel PREORDER, preOrderId link, idempotent). Points rule: +2 on sale create (to salesperson), −2 floor-0 on delete. Setting 'shiftHours' added ('8').
+- Deviations: (1) tab label rendered compact 'فروش و SPHL' (English 'Sales & SPHL' shown inside the tab's explainer + card subtitles, matching sibling tab style); (2) POST also stores cashierId=actor so 'actor can delete' works client-side; (3) audit actions use literal 'sale.create'/'sale.delete' per task spec (existing routes use UPPER_SNAKE — mixed convention now, flagging for consistency sweep); (4) pre-existing quirk (not mine): re-PATCHing 'done' re-awards the +2 preorder points though sales stay idempotent; (5) summary windows use server local day (spec-sanctioned) not Tehran-offset math.
+---
+Task ID: cron-review-202609110603 (round 3)
+Agent: webDevReview (main) + 2 subagents (2-b Sales/SPHL, 2-c Planogram print)
+Task: Status assessment, browser QA, RTL polish sweep, Sales & SPHL module, Planogram print, Ctrl+K palette, browser notifications, styling fixes
+
+Work Log:
+- STATUS ASSESSMENT: platform stable (server 200, lint/tsc clean, no console errors). QA sweep over dashboard/orders/reports/crm/planogram found no blocking bugs; minor issues: order-card status badge overflow (HZ-1006), LTR names ellipsized from the wrong side in RTL, StatCard money values clipped by truncate (leading digits hidden!).
+- NEW FEATURE 1 — Sales & SPHL module (Task 2-b, subagent):
+  * Prisma `Sale` model + db:push. GET/POST/DELETE /api/sales (summary: todayTotal/Count, weekTotal, monthTotal, count, byDay[14], bySalesperson[{total,count,sphl}], sphlOverall, topProducts; SPHL = total ÷ (shiftHours Setting(default 8) × distinctDaysWorked)).
+  * POST awards +2 PointsLog «ثبت فروش» to the salesperson; DELETE compensates −2 (floor 0). Both audited (sale.create / sale.delete).
+  * Preorder PATCH 'done' now auto-creates PREORDER-channel Sale rows (idempotent via preOrderId count guard).
+  * CrmSection third tab «فروش و SPHL»: 4 stat cards, quick-log form (product search w/ sellPrice prefill, qty stepper, salesperson select locked to self for non-mgmt, channel pills), recharts 14-day gold BarChart, SPHL leaderboard (gold ring + برترین 🏆), today's list with gated delete. Seed: scripts/seed-sales.ts → 180 sales/30d across 6 role-resolved sellers + Setting shiftHours=8 (idempotent).
+- NEW FEATURE 2 — Planogram print (Task 2-c, subagent): «چاپ | Print» in planogram view → .pz-print-only branded sheet (brand header, Jalali date, status, merchandiser, per-shelf tables w/ barcode/facing/stock, signature line). Cards got p-4 + hover lift + مجموع فیصینگ chip. window.print() pattern mirrors Print PO.
+- NEW FEATURE 3 — Ctrl+K command palette (QuickNav.tsx, cmdk CommandDialog): grouped nav for the user's roles + «سفارش جدید» quick action, keyboard hints footer, Ctrl/Cmd+K toggle. Mounted in page.tsx; footer hint line added.
+- NEW FEATURE 4 — Browser notifications opt-in: bell dropdown footer toggle → Notification.requestPermission, localStorage pz-browser-notif + pz-last-notif-id watermark, fires native RTL notifications for new unread rows on the 15s poll; graceful denial toast (verified in headless).
+- RTL SHELL SWEEP (worklog rec #1): dir="rtl" on shell root (page.tsx) + Login root; html lang="fa"; sidebar mirrored (active bar inset_-3px right edge, icon chips, hover nudge); nav grouped عملیات/تیم و انگیزه/سیستم (nav.ts `group` + navGroupsFor + NAV_GROUP_LABELS); mobile drawer verified (slides from right, grouped).
+- TYPOGRAPHY: Vazirmatn (arabic+latin, 400-900) via next/font, --font-vazir theme token, applied app-wide — Persian text now renders in a proper Persian typeface.
+- TOAST FIX: sonner <Toaster> was only mounted inside OrdersSection (toasts dead in all other sections). Moved to layout (bottom-left, rtl, richColors, closeButton) and removed the local one (avoids double toasts).
+- STYLING FIXES: order-card header flex-wrap + shrink-0 code (badge overflow gone); kit StatCard value no longer truncates (wraps, data-integrity); dir="auto" on truncating product/supplier/user names (orders cards, planogram slots, login grid) so LTR names clip at the end; header desktop now shows Jalali long-date chip (CalendarDays, gold); MobileTabBar min-h 48px + aria-current.
+- Verification: bun run lint 0 errors/0 warnings; tsc clean (app code); agent-browser E2E: RTL dashboard/orders/CRM on desktop + 390px mobile + drawer; Ctrl+K search→navigate; sale logged E2E (+102,000 = 3×34,000 verified via API, toast shown, count 183); planogram print sheet DOM content verified; notif toggle grant/deny paths; GM PIN login re-verified. dev.log clean.
+
+Deviations / notes:
+- Sale audit actions use literal `sale.create`/`sale.delete` (existing convention is UPPER_SNAKE) — flagged for a future consistency sweep.
+- Re-PATCHing preorder 'done' re-awards +2 points (Sale rows are idempotent, points are not) — minor, noted.
+- Server-day boundaries for "today" use server-local calendar day (Tehran server assumed); refine when Holoo register data arrives.
+- Test data left intentionally: ~181 seeded sales + 1 demo sale + preorder #1 DONE w/ 2 linked PREORDER sales.
+
+Stage Summary:
+- Shipped 4 new features (Sales/SPHL module end-to-end, Planogram print, Ctrl+K palette, browser notifications) + RTL-first shell + Vazirmatn typography + 5 styling/QA fixes. Platform now covers the last major spec gap (SPHL statistics). All golden paths re-verified; lint/tsc clean; no schema breaks (Sale added, nothing removed).
+
+Unresolved / next-round recommendations (priority order):
+1) Sidebar badge counts (badgeKey exists in nav.ts but Sidebar doesn't render badges yet — wire ordersToday/deliveries/tasks/messages/cheques counts).
+2) Sales dashboard integration: add today's sales + SPHL mini-cards to DashboardSection briefing using GET /api/sales summary.
+3) Holoo sales import (XLS) → real register sales → replace manual Sale logging for SPHL accuracy.
+4) Audit-action naming consistency sweep (sale.create vs SALE_CREATE).
+5) Preorder done re-award points guard (check PointsLog for preOrderId-linked reason before awarding).
+6) i18n date picker parity: JalaliCalendar already RTL; consider Persian weekday headers audit.
+
+---
+Task ID: 2-b
+Agent: full-stack-developer
+Task: Nav badge counts + dashboard sales pulse
+
+Work Log:
+- Read worklog conventions, prisma/schema.prisma (Message.conversation relation confirmed → `conversation: { is: { OR: [userAId/userBId] } }` filter valid), store.ts, nav.ts, Sidebar.tsx, page.tsx, dashboard API/section, /api/sales GET summary (byDay pattern reference only — file NOT modified).
+- NEW src/app/api/badges/route.ts (GET, force-dynamic): one parallel Promise.all of 6 counts — orders (status DRAFT/SUBMITTED/APPROVED), deliveries (APPROVED/RECEIVED), tasksMine (assignedToId=userId, OPEN/IN_PROGRESS/PAUSED), messagesUnread (readAt null + senderId ≠ userId + conversation belongs to user via `conversation: { is: { OR: [...] } }`), cheques (PENDING_APPROVAL OR WRITTEN/SIGNED/GIVEN with dueDate ≤ now+7d), notifications (userId, readAt null). Invalid/missing userId OR any DB error → zeros (never 500).
+- src/lib/store.ts: added `badges: BadgeCounts` (Record of the 6 keys), `badgesUserId: number | null`, `setBadges(b, userId?)` (shallow-merges; optional 2nd arg stamps the owner user id so the poller can re-target). Existing keys (user/view/setView/openOrder/newOrderSignal) untouched → backward compatible; zustand persist just gains two fields (safe shallow-merge with defaults).
+- NEW src/components/platform/BadgesPoller.tsx (returns null): mounted once in page.tsx inside the logged-in branch right after <QuickNav>. When user set → fetches /api/badges?userId= immediately + every 25s + on window focus; stale-response guard (drops results if session user changed mid-flight); silent-fail on errors. Logout zeroing lives in the effect CLEANUP (poller unmounts together with the logged-in branch, so the `!user` branch never runs in practice) — guarded `user === null || user.id === uid` so a same-user remount also zeroes-then-refetches.
+- src/lib/nav.ts: badgeKey type union now 'orders' | 'deliveries' | 'tasksMine' | 'messagesUnread' | 'cheques'; wired orders→'orders', deliveries→'deliveries', tasks→'tasksMine', messages→'messagesUnread', payments→'cheques'. Added shared `badgeCountText(n)` (Persian digits, «+» suffix above 9 e.g. «۱۲+», hard cap «۹۹+»).
+- src/components/platform/Sidebar.tsx NavButton (shared by desktop sidebar AND mobile drawer): reads `useApp((s) => s.badges)`; when item.badgeKey count > 0 renders a pill at the row end (between labelFa and the tiny English label — English label kept): `min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-black`; gold `bg-[#DAA520] text-[#2F4A36] shadow` for orders/cheques, olive `bg-[#93C572] text-[#253A2A]` for deliveries/tasksMine, rose `bg-rose-500 text-white` for messagesUnread; messagesUnread additionally gets a tiny `animate-ping` halo span behind the pill with `motion-reduce:hidden`.
+- page.tsx: MobileTabBar — main 5 tabs get an absolute dot (`h-2 w-2 rounded-full bg-rose-500`, `right-[calc(50%-22px)] top-1`) inside the now-`relative` button when the tab's badgeKey count > 0 (no layout shift; labels don't move); «more» chips get the count pill inline (`h-4 text-[9px]`, same color mapping). Mounted <BadgesPoller /> after <QuickNav user={user} />.
+- src/app/api/dashboard/route.ts: appended 4 queries to the same Promise.all (sales-today aggregate [server-local calendar day, same todayStart/tomorrowStart], today's sale rows {total,salespersonId}, 14-day sale rows, Setting 'shiftHours'). Response gains `sales: { todayTotal, todayCount, sphl, topSeller, byDay }` — sphl = round(todayTotal ÷ (distinct sellers today × shiftHours, fallback 8)), 0 when no sellers today; topSeller = today's best by total ({name, total} | null, one tiny user lookup); byDay = 14 local-day buckets YYYY-MM-DD oldest→today, missing days 0 (mirrors /api/sales summary pattern).
+- DashboardSection.tsx: DashData extended with the same `sales` shape; NEW clickable card row between BriefingCard and the stat grid — «نبض فروش امروز | Sales pulse today» (div role=button tabIndex=0 + Enter/Space handler, cursor-pointer, gold border, hover lift+shadow, p-4): RTL-start block = big Money todayTotal + «N فاکتور امروز | N invoices» + gold SPHL badge «SPHL: Y تومان/ساعت» + olive «🏆 برترین: نام» chip when present; RTL-end block = w-full sm:w-56 h-16 dir='ltr' recharts AreaChart sparkline of byDay (stroke #B8860B, gradient fill salesPulseFill, hidden axes, minimal Tooltip w/ fmtMoney + Jalali label). Card always renders; when todayTotal===0 && todayCount===0 the numbers block is replaced by «امروز هنوز فروشی ثبت نشده | No sales yet today» (sparkline stays). onClick → setView('crm'). Existing olive/gold tokens only.
+- QA data created per task instructions: conversation #1 (users 49↔50) + 1 unread message from Javad Norouzi to GM via POST /api/messages (left unread intentionally so the messages badge is demonstrable).
+
+Verification:
+- bun run lint → 0 errors 0 warnings. bunx tsc --noEmit → only pre-existing examples/ + skills/ errors (0 from my files).
+- curl /api/badges?userId=50 → {orders:4, deliveries:2, tasksMine:0, messagesUnread:1, cheques:2, notifications:7}; userId=abc / missing → all zeros. Cross-checked every count with direct Prisma queries from Node — exact match.
+- curl /api/dashboard → sales.todayTotal 2,051,000 / todayCount 10 / sphl 64,094 / topSeller Ms. Yadegari (1,680,000) / byDay 14 buckets — numbers identical to GET /api/sales?limit=1 summary (todayTotal 2,051,000, todayCount 10, last byDay 2026-09-10 = 2,051,000).
+- agent-browser E2E: login Mrs. Lotfi (2222) → sidebar pills verified in DOM (سفارش‌ها ۴ / تحویل کالا ۲ / پرداخت و چک ۲ / پیام‌ها ۱ + ping halo; no pill on zero rows); pulse card renders money+invoices+SPHL+برترین+sparkline SVG (recharts area path confirmed) and click navigates to CRM. Logout → persisted store badges all-zero + badgesUserId null; login → poller re-targets (verified with user 50 AND user 54 — different per-user counts, uid matches session id). Mobile 390×844: 5 tabs intact 48px tall, 3 absolute dots, «پرداخت و چک۲» chip pill, drawer shows the same pills. Screenshots: qa4-badges.png, qa4-pulse.png, qa4-mobile-badges.png. agent-browser errors empty; console clean; dev.log shows GET /api/badges 200 (12ms warm) + no app errors.
+
+Stage Summary:
+- /api/badges contract: GET /api/badges?userId=<id> → `{ orders, deliveries, tasksMine, messagesUnread, cheques, notifications }` (all numbers, never 500 — zeros on bad input/error). Semantics: orders = DRAFT/SUBMITTED/APPROVED pipeline; deliveries = APPROVED/RECEIVED awaiting receive/confirm; tasksMine = my OPEN/IN_PROGRESS/PAUSED; messagesUnread = unread others' messages in my conversations; cheques = PENDING_APPROVAL + WRITTEN/SIGNED/GIVEN due ≤7d; notifications = my unread.
+- Store: `useApp(s => s.badges)` + `setBadges(b, userId?)` + `badgesUserId` — any component can render badge counts; poller keeps them fresh (25s + focus).
+- Deviations: (1) MobileTabBar main-tab dots use rose-500 for all badge keys exactly as specified (a gold/olive variant would match the sidebar mapping better — one-line change if wanted). (2) Pulse card numbers sit at the RTL start (physical right) and sparkline at RTL end (physical left) — task said "Left (RTL start)" which mixes conventions; chose true RTL-start placement for reading order. (3) Sidebar pill sits between labelFa and the tiny English label (English label kept, pill visually dominant). (4) Badge zeroing on logout happens in the poller's effect cleanup (component unmounts with the logged-in branch — a body-level `!user` branch alone can never fire). (5) QA artifacts left in DB: conversation #1 + 1 unread GM message (intentional), everything else untouched.
+---
+Task ID: 2-a
+Agent: full-stack-developer
+Task: Holoo sales XLS import (API + CRM modal)
+
+Work Log:
+- Read worklog.md (Key facts + API CONTRACT + last 250 lines), products/parse route (XLSX patterns), sales route (Sale conventions + audit helper), jalali.ts (jalaliToISO server-safe via jalaali-js), api.ts (uploadFile helper), kit.tsx (Modal/buttons), prisma schema (Sale/User), live DB via /api/users + /api/products + /api/sales.
+- NEW src/app/api/sales/import/route.ts — single POST route dispatching on content-type:
+  * multipart preview (parse-only, no writes): sheet_to_json header:1 grid, header detection scans first 10 rows w/ best score (Persian/English headers, digits+ZWNJ+dash normalization + Arabic ك/ي→ک/ی fix; match priority seller→barcode→date→unitPrice→total→qty→name so «نام فروشنده» never hits the name column); derives total=qty×unitPrice or unitPrice=round(total÷qty) when missing; row valid = (name OR barcode) AND qty>0; product match by normalized barcode exact else normalized name key over BOTH product.name and product.nameFa; Jalali OR Gregorian OR Excel-serial date parsing (Jalali via jalaliToISO from src/lib/jalali.ts, e.g. 1405/06/19 → 2026-09-10); seller fuzzy-match (normalized contains both ways, paren-stripped + Mr/Ms/خانم prefixes stripped) restricted to active SALESPERSON/CASHIER; dedup key = normNameKey(matched product name else name else barcode)+qty+round(total)+server-local day vs last-90-days Sales → status ok|duplicate(with duplicateOfId)|invalid; returns {rows,total,ok,duplicates,invalid,sellers:[{id,name}]}; errors → 400 Persian.
+  * JSON commit: actor must be active OWNER/GM/OM/IT_ADMIN/ACCOUNTANT else 403 Persian; ≤1000 rows (400); seller = row.sellerId(validated) ?? defaultSellerId(validated) ?? actor; skips qty<=0 as invalid; createMany Sale{productId?,name,qty,unitPrice,total:round(total||qty×unitPrice),channel:'WALKIN',salespersonId,cashierId:null,note:'ورود از هولو | Holoo import',createdAt:row date (or now)} — createdAt from row so SPHL day buckets are correct; NO PointsLog/points; dedup re-check like preview (skip → skippedDuplicates) unless force:true, inserted keys added to set so in-file dupes are caught; single audit SALES_IMPORT/Sale detail 'ورود N قلم فروش از فایل هولو — مجموع X تومان'; returns {created,skippedDuplicates,invalid}.
+- CrmSection.tsx SalesTab: added canImport = isMgmt(OWNER/GM/OM/IT) || ACCOUNTANT; GhostButton «ورود فروش هولو | Holoo import» (Upload icon, min-h-[44px]) in the quick-log card header row; new HolooImportModal (kit Modal wide): step 1 styled file input (.xls/.xlsx/.csv) + Persian/English expected-columns helper + «بررسی فایل | Parse» PrimaryButton (uploadFile('/api/sales/import', file, {userId})); step 2 summary badges (X قابل ثبت olive / Y تکراری stone / Z نامعتبر rose), scrollable preview table (max-h-72 pz-scroll, sticky Th header: نام کالا dir=auto+matchedName+reason, تعداد, قیمت fmtMoney, مبلغ Money, تاریخ fmtJalali, وضعیت badge incl. amber «فروشنده نامعتبر» when seller cell present but unmatched), default-seller Select (only when some ok row lacks sellerId, options = parse sellers else actor), «ثبت N قلم فروش | Import» GoldButton (disabled N=0) → POST JSON commit → success toast «N قلم فروش ثبت شد ✓ (+M تکراری رد شد)» → close + reload sales list via existing load(); error toasts; olive/gold/cream only, ≥44px targets, RTL, sonner.
+- scripts/holoo-test-xlsx.ts → /tmp/holoo-sales-test.xlsx (Persian header نام کالا/کد کالا/بارکد/تعداد/قیمت فروش/جمع کل/تاریخ/فروشنده + 7 rows: 2 barcode matches, 1 nameFa-only match w/ derived total, 1 unmatched product+seller, 1 Jalali date + partial English seller match, 1 duplicate of a sale created via POST /api/sales, 1 invalid qty-0 row).
+- Verification (live server): parse → {total:7,ok:4,duplicates:2,invalid:1,sellers:6}, Jalali 1405/06/18→2026-09-09 & 1405/06/19→2026-09-10, seller matches 63/62 + unmatched case; commit as accountant id 54 w/ defaultSellerId 63 → {created:4,skippedDuplicates:0,invalid:0}; Sale 186-189 verified via Prisma (createdAt per row incl. 2026-09-09T00:00:00Z, cashierId null, note 'ورود از هولو | Holoo import', 0 PointsLog); re-commit → {created:0,skippedDuplicates:4,invalid:0}; re-parse after commit → {ok:0,duplicates:6,invalid:1} (whole file flips duplicate); MERCHANDISER id 55 commit → HTTP 403 Persian message; bad-header/missing-file/empty-rows → 400 Persian; GET /api/sales summary moved todayTotal 2,051,000→2,599,000 count 183→188 and Mrs. Mohammadi appears in bySalesperson. Browser (agent-browser): CRM → فروش و SPHL → modal opens → upload+Parse → badges «۰ قابل ثبت / ۶ تکراری / ۱ نامعتبر» + status table (screenshots /tmp/holoo-import-preview.png, /tmp/holoo-modal.png). bun run lint 0 errors/0 warnings; bunx tsc --noEmit clean for app code; dev.log: POST /api/sales/import 200, no errors. Work record: agent-ctx/2-a-full-stack-developer.md.
+
+Stage Summary:
+- Holoo sales import is live: POST /api/sales/import handles multipart parse-preview and JSON commit in one route (dispatch on content-type). API contract for downstream agents:
+  * Preview: {rows:[{name,barcode,qty,unitPrice,total,isoDate,sellerName?,sellerId?,sellerMatched,productId?,matchedName?,matched?,duplicateOfId?,status:'ok'|'duplicate'|'invalid',reason?}],total,ok,duplicates,invalid,sellers:[{id,name}]}.
+  * Commit request {userId,rows:[{name,barcode?,qty,unitPrice,total,isoDate,sellerId?,productId?}],defaultSellerId?,force?} → {created,skippedDuplicates,invalid}; roles OWNER/GM/OM/IT_ADMIN/ACCOUNTANT only (403 otherwise); Sale.createdAt = row date; no points; single SALES_IMPORT audit.
+- Deviations: (1) product name-match also indexes nameFa (Holoo exports Persian descriptions); (2) dedup day-slice uses server-local dayKey (matches /api/sales buckets); (3) 0-row commit still writes the audit (documents attempt); (4) test artifacts left: Sale 185 (created via POST /api/sales for dup test) + imported Sales 186-189 + scripts/holoo-test-xlsx.ts kept; (5) kit Modal doesn't close on Escape (pre-existing). No schema changes; /api/sales untouched; closes worklog backlog item «3) Holoo sales import (XLS) → real register sales».
+
+---
+Task ID: cron-review-202609110623 (round 4)
+Agent: webDevReview (main) + 2 subagents (2-a Holoo import, 2-b badges+pulse)
+Task: Status assessment, browser QA, bug fixes, Holoo sales XLS import, nav badge counts, dashboard sales pulse
+
+Work Log:
+- STATUS ASSESSMENT: platform stable (server 200, lint clean, no console errors, prior golden paths intact). QA sweep found 2 cosmetic bugs:
+  1) Login staff cards showed raw English role enums ("OPERATION_MA…", "GENERAL_MANA…") instead of Persian labels.
+  2) Login bilingual tagline wrapped awkwardly mid-sentence at mobile width.
+- FIX 1: Login.tsx role line now maps roles via ROLE_LABELS (fa part before '|') → "مدیر عامل · حسابدار …", dir=rtl, text-[#6B7A66].
+- FIX 2 (worklog rec #5 from round 3): PreOrder PATCH 'done' points guard — +2 PointsLog now awarded ONLY when no Sale rows exist for the preorder (same guard as sale creation); re-done writes audit detail "امتیاز و فروش قبلاً ثبت شده بود (تکراری)". Verified logic by code review (guard proxies first-completion correctly).
+- FIX 3: login tagline stacked on mobile (English sub-line hidden ≥sm).
+- FEATURE 1 (Task 2-a subagent) — Holoo sales XLS import, closing backlog item #3:
+  * NEW /api/sales/import: POST multipart = parse-preview (fuzzy Persian/English header detection incl. ك/ي + ZWNJ normalization, qty/unitPrice/total cross-derivation, Jalali|Gregorian|Excel-serial dates, product match by barcode→name/nameFa, seller fuzzy-match vs SALESPERSON/CASHIER, 90-day dedup keys → status ok|duplicate|invalid, sellers list); POST JSON = commit {userId,rows,defaultSellerId?,force?} → actor must be OWNER/GM/OM/IT_ADMIN/ACCOUNTANT (403 otherwise), ≤1000 rows, Sale rows with row-date createdAt + channel WALKIN + note 'ورود از هولو | Holoo import', NO points on import, single SALES_IMPORT audit, re-checks duplicates (skip unless force) → {created,skippedDuplicates,invalid}.
+  * CrmSection SalesTab: role-gated «ورود فروش هولو | Holoo import» button → 2-step modal (file → parse preview w/ summary badges + scrollable table + default-seller select + disabled Import when 0 ok rows) → toast + reload.
+  * Verified end-to-end (curl + browser): parse 7-row test XLS → 4 ok/2 dup/1 invalid; commit created 4 (per-row createdAt correct); re-commit → 0 created/4 skipped; re-parse → all 6 dup; merchandiser 403; todayTotal moved in /api/sales summary. Test script kept at scripts/holoo-test-xlsx.ts.
+- FEATURE 2 (Task 2-b subagent) — nav badge counts, closing backlog item #1:
+  * NEW /api/badges?userId= → {orders,deliveries,tasksMine,messagesUnread,cheques,notifications} (never 500). Store: badges+setBadges+badgesUserId. NEW BadgesPoller.tsx (fetch now/25s/window-focus, stale-guard, zero-on-logout via cleanup) mounted in page.tsx.
+  * nav.ts badgeKey wired (orders/deliveries/tasksMine/messagesUnread/cheques) + badgeCountText() (fa digits, cap «۹۹+»).
+  * Sidebar NavButton pills (gold orders/cheques, olive deliveries/tasks, rose messages + animate-ping halo motion-reduce:hidden); MobileTabBar absolute rose dots (no layout shift) + inline pills on 'more' chips; badges exposed to a11y tree («سفارشها ۴»).
+  * Verified: counts cross-checked vs Prisma; login/logout re-targeting; 390px layout intact.
+- FEATURE 3 (Task 2-b subagent) — dashboard «نبض فروش امروز | Sales pulse today» card, closing backlog item #2:
+  * /api/dashboard now returns sales:{todayTotal,todayCount,sphl,topSeller,byDay[14]} (sphl = todayTotal ÷ distinct sellers today × shiftHours Setting).
+  * DashboardSection: clickable card (→crm) with big Money, invoice count, gold SPHL badge, 🏆 top-seller chip, dir=ltr gold sparkline AreaChart; zero-day state text. Numbers verified identical to /api/sales summary.
+- STYLING: role-label Persian login cards, tagline wrap, badge pill design system (gold/olive/rose on dark sidebar), sales pulse card in olive/gold tokens. qa4-*.png screenshots saved at repo root.
+- Final: bun run lint 0/0; tsc clean (app code); browser console + errors empty; dev.log 200s only.
+
+Stage Summary:
+- 3 features shipped (Holoo sales import end-to-end, live nav badges, sales pulse dashboard card) + 3 fixes (login Persian roles, login tagline wrap, preorder double-points guard). All 3 previous backlog recommendations closed (#1 #2 #3 + #5 guard).
+- New API contracts: GET /api/badges?userId= → 6 counters; POST /api/sales/import (multipart=preview, JSON=commit, role-gated, dedup). /api/dashboard += sales object. Store += badges/setBadges.
+- Test data left intentionally: imported sales 186-189 + Sale 185 (dup test base) + conversation GM↔Kianoosh w/ 1 unread msg (badge demo) + scripts/holoo-test-xlsx.ts.
+
+Unresolved / next-round recommendations (priority order):
+1) Profit-margin report per Holoo import: imported register sales lack cost basis — consider joining Sale.productId → Product.buyPrice for margin analytics in Reports (SPHL exists, margin-on-sales not yet).
+2) Sale audit-action consistency sweep still pending (sale.create/sale.delete/SALES_IMPORT vs UPPER_SNAKE elsewhere).
+3) Check-printing sheet: cheque detail print template (bank-style فارسی cheque layout) for Mrs. Darvishi.
+4) Low-stock auto-draft: one-click "generate draft order from low-stock list" in Products/Warehouse to prefill the order wizard.
+5) Persian weekday header audit on JalaliCalendar (rec #6 round 3, still open).
+6) Notification bell header badge shows Latin digits? verify & toFaDigits if needed (spotted but unconfirmed at small size).

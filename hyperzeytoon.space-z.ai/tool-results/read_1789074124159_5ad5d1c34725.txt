@@ -1,0 +1,632 @@
+     1→     1→'use client'
+     2→     2→
+     3→     3→// Multi-step order wizard: provider → products → review (also used for editing)
+     4→     4→import * as React from 'react'
+     5→     5→import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+     6→     6→import { Button } from '@/components/ui/button'
+     7→     7→import { Input } from '@/components/ui/input'
+     8→     8→import { Textarea } from '@/components/ui/textarea'
+     9→     9→import { Badge } from '@/components/ui/badge'
+    10→    10→import { Loader2, Minus, Plus, Check, ArrowLeft, ArrowRight, Ban } from 'lucide-react'
+    11→    11→import { cn } from '@/lib/utils'
+    12→    12→import { api } from '@/lib/api'
+    13→    13→import { toast } from '@/hooks/use-toast'
+    14→    14→import { money, toFaDigits, isoDay, formatJalaliFull } from '@/lib/jalali'
+    15→    15→import { StockIndicator } from '@/components/platform/ui/shared'
+    16→    16→import { JalaliDatePicker } from '@/components/platform/ui/jalali-date-picker'
+    17→    17→import { useApp } from '@/store/app'
+    18→    18→import type { OrderDTO } from '@/lib/types'
+    19→    19→import {
+    20→    20→  useCatalog, holidaySetOf, isClosedDay, rowCalc, ProductHistoryPopover,
+    21→    21→  type CatalogBundle, type CatalogProduct,
+    22→    22→} from './commerce-bits'
+    23→    23→
+    24→    24→interface CartLine {
+    25→    25→  qty: number
+    26→    26→  unitPrice: number
+    27→    27→}
+    28→    28→
+    29→    29→const STEPS = ['انتخاب تأمین‌کننده', 'افزودن کالا', 'بازبینی و ثبت']
+    30→    30→
+    31→    31→export function NewOrderWizard({
+    32→    32→  open,
+    33→    33→  onOpenChange,
+    34→    34→  onSaved,
+    35→    35→  editOrder,
+    36→    36→}: {
+    37→    37→  open: boolean
+    38→    38→  onOpenChange: (v: boolean) => void
+    39→    39→  onSaved: () => void
+    40→    40→  editOrder?: OrderDTO | null
+    41→    41→}) {
+    42→    42→  const user = useApp((s) => s.user)
+    43→    43→  const { data: catalog, loading } = useCatalog()
+    44→    44→  const [step, setStep] = React.useState(0)
+    45→    45→  const [saving, setSaving] = React.useState(false)
+    46→    46→  const [bump, setBump] = React.useState<string | null>(null)
+    47→    47→
+    48→    48→  const [providerId, setProviderId] = React.useState<string | null>(null)
+    49→    49→  const [companyFilter, setCompanyFilter] = React.useState<string | null>(null)
+    50→    50→  const [search, setSearch] = React.useState('')
+    51→    51→  const [category, setCategory] = React.useState<string | null>(null)
+    52→    52→  const [cart, setCart] = React.useState<Record<string, CartLine>>({})
+    53→    53→
+    54→    54→  const tomorrow = React.useMemo(() => {
+    55→    55→    const d = new Date()
+    56→    56→    d.setDate(d.getDate() + 1)
+    57→    57→    return d
+    58→    58→  }, [])
+    59→    59→  const [receivingDate, setReceivingDate] = React.useState<Date | null>(tomorrow)
+    60→    60→  const [paymentType, setPaymentType] = React.useState<'CASH' | 'CHEQUE'>('CHEQUE')
+    61→    61→  const [note, setNote] = React.useState('')
+    62→    62→
+    63→    63→  const holidaySet = React.useMemo(() => holidaySetOf(catalog), [catalog])
+    64→    64→
+    65→    65→  // reset / prefill on open
+    66→    66→  React.useEffect(() => {
+    67→    67→    if (!open) return
+    68→    68→    setStep(0)
+    69→    69→    setSaving(false)
+    70→    70→    setSearch('')
+    71→    71→    setCategory(null)
+    72→    72→    setCompanyFilter(null)
+    73→    73→    setBump(null)
+    74→    74→    if (editOrder) {
+    75→    75→      setProviderId(editOrder.providerId ?? null)
+    76→    76→      const lines: Record<string, CartLine> = {}
+    77→    77→      for (const it of editOrder.items) {
+    78→    78→        if (it.productId) lines[it.productId] = { qty: it.qty, unitPrice: it.unitPrice }
+    79→    79→      }
+    80→    80→      setCart(lines)
+    81→    81→      setReceivingDate(new Date(editOrder.receivingDate))
+    82→    82→      setPaymentType(editOrder.paymentType === 'CASH' ? 'CASH' : 'CHEQUE')
+    83→    83→      setNote(editOrder.note ?? '')
+    84→    84→    } else {
+    85→    85→      setCart({})
+    86→    86→      const t = new Date()
+    87→    87→      t.setDate(t.getDate() + 1)
+    88→    88→      setReceivingDate(t)
+    89→    89→      setPaymentType('CHEQUE')
+    90→    90→      setNote('')
+    91→    91→    }
+    92→    92→  }, [open, editOrder])
+    93→    93→
+    94→    94→  const provider = catalog?.providers.find((p) => p.id === providerId) ?? null
+    95→    95→
+    96→    96→  const categories = React.useMemo(() => {
+    97→    97→    const set = new Set<string>()
+    98→    98→    for (const p of catalog?.products ?? []) set.add(p.category)
+    99→    99→    return Array.from(set).slice(0, 14)
+   100→   100→  }, [catalog])
+   101→   101→
+   102→   102→  const cartEntries = React.useMemo(() => {
+   103→   103→    const out: { product: CatalogProduct; line: CartLine; row: ReturnType<typeof rowCalc> }[] = []
+   104→   104→    for (const [pid, line] of Object.entries(cart)) {
+   105→   105→      const product = catalog?.products.find((p) => p.id === pid)
+   106→   106→      if (!product) continue
+   107→   107→      out.push({ product, line, row: rowCalc(line.qty, line.unitPrice) })
+   108→   108→    }
+   109→   109→    return out
+   110→   110→  }, [cart, catalog])
+   111→   111→
+   112→   112→  const cartTotal = cartEntries.reduce((s, e) => s + e.row.total, 0)
+   113→   113→  const cartBase = cartEntries.reduce((s, e) => s + e.row.base, 0)
+   114→   114→  const cartVat = cartTotal - cartBase
+   115→   115→  const itemsCount = Object.keys(cart).length
+   116→   116→
+   117→   117→  const setQty = (p: CatalogProduct, qty: number) => {
+   118→   118→    setCart((prev) => {
+   119→   119→      const next = { ...prev }
+   120→   120→      if (qty <= 0) delete next[p.id]
+   121→   121→      else next[p.id] = { qty, unitPrice: next[p.id]?.unitPrice ?? p.buyPrice }
+   122→   122→      return next
+   123→   123→    })
+   124→   124→    if (qty > 0) {
+   125→   125→      setBump(p.id)
+   126→   126→      setTimeout(() => setBump((b) => (b === p.id ? null : b)), 350)
+   127→   127→    }
+   128→   128→  }
+   129→   129→
+   130→   130→  const setPrice = (p: CatalogProduct, price: number) => {
+   131→   131→    setCart((prev) => {
+   132→   132→      if (!prev[p.id]) return prev
+   133→   133→      return { ...prev, [p.id]: { ...prev[p.id], unitPrice: price } }
+   134→   134→    })
+   135→   135→  }
+   136→   136→
+   137→   137→  const canNext = step === 0 ? Boolean(providerId) : step === 1 ? itemsCount > 0 : true
+   138→   138→
+   139→   139→  const submit = async () => {
+   140→   140→    if (!provider || !receivingDate) {
+   141→   141→      toast({ title: 'تأمین‌کننده و تاریخ دریافت لازم است', variant: 'destructive' })
+   142→   142→      return
+   143→   143→    }
+   144→   144→    if (itemsCount === 0) {
+   145→   145→      toast({ title: 'سبد خالی است', variant: 'destructive' })
+   146→   146→      return
+   147→   147→    }
+   148→   148→    setSaving(true)
+   149→   149→    try {
+   150→   150→      const items = cartEntries.map((e) => ({
+   151→   151→        productId: e.product.id,
+   152→   152→        name: e.product.name,
+   153→   153→        barcode: e.product.barcodes[0]?.code ?? null,
+   154→   154→        unit: e.product.unit,
+   155→   155→        qty: e.line.qty,
+   156→   156→        unitPrice: e.line.unitPrice,
+   157→   157→      }))
+   158→   158→      const payload = {
+   159→   159→        providerId: provider.id,
+   160→   160→        providerName: provider.name,
+   161→   161→        companyName: provider.companies[0]?.name ?? null,
+   162→   162→        paymentType,
+   163→   163→        receivingDate: receivingDate.toISOString(),
+   164→   164→        note: note.trim() || undefined,
+   165→   165→        items,
+   166→   166→      }
+   167→   167→      if (editOrder) {
+   168→   168→        await api(`/api/orders/${editOrder.id}`, { method: 'PATCH', body: payload })
+   169→   169→        toast({ title: 'سفارش ویرایش شد', description: payload.providerName })
+   170→   170→      } else {
+   171→   171→        const res = await api<{ success: boolean; order: OrderDTO }>('/api/orders', { body: payload })
+   172→   172→        toast({ title: `سفارش ${res.order.code} ثبت شد`, description: 'برای تأیید به مدیر ارسال شد ✅' })
+   173→   173→      }
+   174→   174→      onSaved()
+   175→   175→      onOpenChange(false)
+   176→   176→    } catch (e) {
+   177→   177→      toast({ title: 'خطا در ثبت سفارش', description: e instanceof Error ? e.message : undefined, variant: 'destructive' })
+   178→   178→    } finally {
+   179→   179→      setSaving(false)
+   180→   180→    }
+   181→   181→  }
+   182→   182→
+   183→   183→  return (
+   184→   184→    <Dialog open={open} onOpenChange={(v) => { if (!saving) onOpenChange(v) }}>
+   185→   185→      <DialogContent className="w-[95vw] max-w-4xl max-h-[92vh] flex flex-col gap-0 p-0 overflow-hidden">
+   186→   186→        <DialogHeader className="px-4 pt-4 pb-3 border-b border-border shrink-0">
+   187→   187→          <DialogTitle className="text-base md:text-lg flex items-center gap-2">
+   188→   188→            {editOrder ? `ویرایش سفارش ${editOrder.code}` : 'سفارش خرید جدید'}
+   189→   189→          </DialogTitle>
+   190→   190→          <DialogDescription className="text-xs">
+   191→   191→            {editOrder ? 'ردیف‌ها و اطلاعات سفارش را ویرایش کنید' : 'در سه گام: تأمین‌کننده، کالاها و بازبینی نهایی'}
+   192→   192→          </DialogDescription>
+   193→   193→          {/* step chips */}
+   194→   194→          <div className="flex items-center gap-1.5 mt-3" role="tablist" aria-label="مراحل سفارش">
+   195→   195→            {STEPS.map((label, i) => (
+   196→   196→              <button
+   197→   197→                key={label}
+   198→   198→                type="button"
+   199→   199→                role="tab"
+   200→   200→                aria-selected={step === i}
+   201→   201→                onClick={() => { if (i <= step || canGo(i)) setStep(i) }}
+   202→   202→                className={cn(
+   203→   203→                  'flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold transition-colors touch-target',
+   204→   204→                  step === i ? 'bg-primary text-primary-foreground' : i < step ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground'
+   205→   205→                )}
+   206→   206→              >
+   207→   207→                <span className={cn('h-5 w-5 rounded-full text-[10px] flex items-center justify-center num', step === i ? 'bg-white/25' : 'bg-background/60')}>
+   208→   208→                  {i < step ? <Check className="h-3 w-3" /> : toFaDigits(i + 1)}
+   209→   209→                </span>
+   210→   210→                <span className="hidden sm:inline">{label}</span>
+   211→   211→              </button>
+   212→   212→            ))}
+   213→   213→          </div>
+   214→   214→        </DialogHeader>
+   215→   215→
+   216→   216→        <div className="flex-1 overflow-y-auto p-4">
+   217→   217→          {loading && !catalog ? (
+   218→   218→            <div className="flex items-center justify-center py-16 gap-2 text-sm text-muted-foreground">
+   219→   219→              <Loader2 className="h-5 w-5 animate-spin" /> در حال دریافت اطلاعات…
+   220→   220→            </div>
+   221→   221→          ) : step === 0 ? (
+   222→   222→            <ProviderStep
+   223→   223→              catalog={catalog}
+   224→   224→              providerId={providerId}
+   225→   225→              onSelect={(id) => { setProviderId(id); setCompanyFilter(null) }}
+   226→   226→              companyFilter={companyFilter}
+   227→   227→              onCompanyFilter={setCompanyFilter}
+   228→   228→              onNext={() => setStep(1)}
+   229→   229→            />
+   230→   230→          ) : step === 1 ? (
+   231→   231→            <ProductsStep
+   232→   232→              catalog={catalog}
+   233→   233→              provider={provider}
+   234→   234→              search={search}
+   235→   235→              onSearch={setSearch}
+   236→   236→              category={category}
+   237→   237→              categories={categories}
+   238→   238→              onCategory={setCategory}
+   239→   239→              cart={cart}
+   240→   240→              bump={bump}
+   241→   241→              setQty={setQty}
+   242→   242→              setPrice={setPrice}
+   243→   243→            />
+   244→   244→          ) : (
+   245→   245→            <ReviewStep
+   246→   246→              provider={provider}
+   247→   247→              entries={cartEntries}
+   248→   248→              receivingDate={receivingDate}
+   249→   249→              onReceivingDate={setReceivingDate}
+   250→   250→              holidaySet={holidaySet}
+   251→   251→              paymentType={paymentType}
+   252→   252→              onPaymentType={setPaymentType}
+   253→   253→              note={note}
+   254→   254→              onNote={setNote}
+   255→   255→              cartBase={cartBase}
+   256→   256→              cartVat={cartVat}
+   257→   257→              cartTotal={cartTotal}
+   258→   258→            />
+   259→   259→          )}
+   260→   260→        </div>
+   261→   261→
+   262→   262→        {/* sticky bottom bar */}
+   263→   263→        <div className="shrink-0 border-t border-border bg-card/70 backdrop-blur px-4 py-3 flex items-center gap-2">
+   264→   264→          <div className="text-xs leading-5">
+   265→   265→            <span className="text-muted-foreground">{toFaDigits(itemsCount)} قلم — </span>
+   266→   266→            <span className="num font-bold text-base text-primary">{money(cartTotal)}</span>{' '}
+   267→   267→            <span className="text-muted-foreground">تومان</span>
+   268→   268→          </div>
+   269→   269→          <div className="ms-auto flex items-center gap-2">
+   270→   270→            {step > 0 && (
+   271→   271→              <Button variant="outline" size="sm" className="touch-target" onClick={() => setStep(step - 1)} disabled={saving}>
+   272→   272→                <ArrowRight className="h-4 w-4" /> قبلی
+   273→   273→              </Button>
+   274→   274→            )}
+   275→   275→            {step < 2 ? (
+   276→   276→              <Button size="sm" className="touch-target" onClick={() => setStep(step + 1)} disabled={!canNext}>
+   277→   277→                بعدی <ArrowLeft className="h-4 w-4" />
+   278→   278→              </Button>
+   279→   279→            ) : (
+   280→   280→              <Button size="sm" className="touch-target font-bold" onClick={submit} disabled={saving || itemsCount === 0 || !receivingDate}>
+   281→   281→                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+   282→   282→                {editOrder ? 'ذخیره ویرایش' : 'ثبت و ارسال برای تأیید'}
+   283→   283→              </Button>
+   284→   284→            )}
+   285→   285→          </div>
+   286→   286→        </div>
+   287→   287→      </DialogContent>
+   288→   288→    </Dialog>
+   289→   289→  )
+   290→   290→
+   291→   291→  function canGo(i: number): boolean {
+   292→   292→    if (i === 0) return true
+   293→   293→    if (i === 1) return Boolean(providerId)
+   294→   294→    return Boolean(providerId) && itemsCount > 0
+   295→   295→  }
+   296→   296→}
+   297→   297→
+   298→   298→// ---------- step 1: provider ----------
+   299→   299→function ProviderStep({
+   300→   300→  catalog, providerId, onSelect, companyFilter, onCompanyFilter, onNext,
+   301→   301→}: {
+   302→   302→  catalog: CatalogBundle | null
+   303→   303→  providerId: string | null
+   304→   304→  onSelect: (id: string) => void
+   305→   305→  companyFilter: string | null
+   306→   306→  onCompanyFilter: (v: string | null) => void
+   307→   307→  onNext: () => void
+   308→   308→}) {
+   309→   309→  const providers = catalog?.providers ?? []
+   310→   310→  const selected = providers.find((p) => p.id === providerId)
+   311→   311→  return (
+   312→   312→    <div>
+   313→   313→      <p className="text-sm font-bold mb-3">تأمین‌کننده را انتخاب کنید</p>
+   314→   314→      {providers.length === 0 ? (
+   315→   315→        <p className="text-sm text-muted-foreground py-8 text-center">تأمین‌کننده‌ای ثبت نشده است</p>
+   316→   316→      ) : (
+   317→   317→        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+   318→   318→          {providers.map((p) => {
+   319→   319→            const active = p.id === providerId
+   320→   320→            const direct = p.kind === 'DIRECT'
+   321→   321→            return (
+   322→   322→              <button
+   323→   323→                key={p.id}
+   324→   324→                type="button"
+   325→   325→                onClick={() => onSelect(p.id)}
+   326→   326→                aria-pressed={active}
+   327→   327→                className={cn(
+   328→   328→                  'text-right rounded-2xl border p-4 transition-all touch-target bg-card hover:-translate-y-0.5',
+   329→   329→                  active ? 'border-primary ring-2 ring-primary/30 bg-primary/5' : 'border-border'
+   330→   330→                )}
+   331→   331→              >
+   332→   332→                <div className="flex items-center justify-between gap-2">
+   333→   333→                  <span className="font-bold text-sm">{p.name}</span>
+   334→   334→                  {active && <Check className="h-4 w-4 text-primary shrink-0" />}
+   335→   335→                </div>
+   336→   336→                <div className="flex items-center gap-2 mt-2">
+   337→   337→                  <Badge className={cn('text-[10px]', direct ? 'bg-[#3E7C59]/15 text-[#3E7C59]' : 'bg-[#C9A227]/15 text-[#8a6f3c]')} variant="secondary">
+   338→   338→                    {direct ? 'مستقیم' : 'واسطه'}
+   339→   339→                  </Badge>
+   340→   340→                  {p.phone && <span className="num text-[11px] text-muted-foreground">☎ {toFaDigits(p.phone)}</span>}
+   341→   341→                </div>
+   342→   342→                {p.companies.length > 0 && (
+   343→   343→                  <p className="text-[11px] text-muted-foreground mt-2 line-clamp-1">شرکت‌ها: {p.companies.map((c) => c.name).join('، ')}</p>
+   344→   344→                )}
+   345→   345→              </button>
+   346→   346→            )
+   347→   347→          })}
+   348→   348→        </div>
+   349→   349→      )}
+   350→   350→
+   351→   351→      {selected && selected.companies.length > 0 && (
+   352→   352→        <div className="mt-4 rounded-xl border border-border p-3 bg-card/60">
+   353→   353→          <p className="text-xs font-bold mb-2">فیلتر کالا بر اساس شرکت (اختیاری)</p>
+   354→   354→          <div className="flex flex-wrap gap-1.5">
+   355→   355→            <button
+   356→   356→              type="button"
+   357→   357→              onClick={() => onCompanyFilter(null)}
+   358→   358→              className={cn('rounded-full px-3 py-1.5 text-xs border touch-target', !companyFilter ? 'bg-primary text-primary-foreground border-transparent' : 'bg-card')}
+   359→   359→            >
+   360→   360→              همه
+   361→   361→            </button>
+   362→   362→            {selected.companies.map((c) => (
+   363→   363→              <button
+   364→   364→                key={c.id}
+   365→   365→                type="button"
+   366→   366→                onClick={() => onCompanyFilter(c.id)}
+   367→   367→                className={cn('rounded-full px-3 py-1.5 text-xs border touch-target', companyFilter === c.id ? 'bg-primary text-primary-foreground border-transparent' : 'bg-card')}
+   368→   368→              >
+   369→   369→                {c.name}
+   370→   370→              </button>
+   371→   371→            ))}
+   372→   372→          </div>
+   373→   373→        </div>
+   374→   374→      )}
+   375→   375→
+   376→   376→      {selected && (
+   377→   377→        <div className="mt-4 flex justify-end">
+   378→   378→          <Button size="sm" className="touch-target" onClick={onNext}>
+   379→   379→            مرحله بعد: افزودن کالا <ArrowLeft className="h-4 w-4" />
+   380→   380→          </Button>
+   381→   381→        </div>
+   382→   382→      )}
+   383→   383→    </div>
+   384→   384→  )
+   385→   385→}
+   386→   386→
+   387→   387→// ---------- step 2: products ----------
+   388→   388→function ProductsStep({
+   389→   389→  catalog, provider, search, onSearch, category, categories, onCategory, cart, bump, setQty, setPrice,
+   390→   390→}: {
+   391→   391→  catalog: CatalogBundle | null
+   392→   392→  provider: CatalogBundle['providers'][number] | null
+   393→   393→  search: string
+   394→   394→  onSearch: (v: string) => void
+   395→   395→  category: string | null
+   396→   396→  categories: string[]
+   397→   397→  onCategory: (v: string | null) => void
+   398→   398→  cart: Record<string, CartLine>
+   399→   399→  bump: string | null
+   400→   400→  setQty: (p: CatalogProduct, qty: number) => void
+   401→   401→  setPrice: (p: CatalogProduct, price: number) => void
+   402→   402→}) {
+   403→   403→  const products = catalog?.products ?? []
+   404→   404→  const list = React.useMemo(() => {
+   405→   405→    let l = products
+   406→   406→    if (search.trim()) {
+   407→   407→      const q = search.trim()
+   408→   408→      l = l.filter((p) => p.name.includes(q) || (p.altName ?? '').includes(q) || (p.brand ?? '').includes(q) || p.barcodes.some((b) => b.code.includes(q)))
+   409→   409→    }
+   410→   410→    if (category) l = l.filter((p) => p.category === category)
+   411→   411→    if (provider) {
+   412→   412→      const compNames = provider.companies.map((c) => c.name)
+   413→   413→      if (compNames.length > 0) {
+   414→   414→        l = [...l].sort((a, b) => {
+   415→   415→          const aM = compNames.some((n) => (a.brand ?? '').includes(n) || a.name.includes(n)) ? 0 : 1
+   416→   416→          const bM = compNames.some((n) => (b.brand ?? '').includes(n) || b.name.includes(n)) ? 0 : 1
+   417→   417→          return aM - bM
+   418→   418→        })
+   419→   419→      }
+   420→   420→    }
+   421→   421→    return l.slice(0, 60)
+   422→   422→  }, [products, search, category, provider])
+   423→   423→
+   424→   424→  return (
+   425→   425→    <div>
+   426→   426→      <div className="flex flex-col sm:flex-row gap-2 mb-3">
+   427→   427→        <Input
+   428→   428→          value={search}
+   429→   429→          onChange={(e) => onSearch(e.target.value)}
+   430→   430→          placeholder="جستجوی کالا، برند یا بارکد…"
+   431→   431→          className="touch-target bg-card"
+   432→   432→          aria-label="جستجوی کالا"
+   433→   433→        />
+   434→   434→      </div>
+   435→   435→      <div className="flex flex-wrap gap-1.5 mb-3">
+   436→   436→        <button
+   437→   437→          type="button"
+   438→   438→          onClick={() => onCategory(null)}
+   439→   439→          className={cn('rounded-full px-3 py-1.5 text-xs border touch-target', !category ? 'bg-primary text-primary-foreground border-transparent' : 'bg-card')}
+   440→   440→        >
+   441→   441→          همه دسته‌ها
+   442→   442→        </button>
+   443→   443→        {categories.map((c) => (
+   444→   444→          <button
+   445→   445→            key={c}
+   446→   446→            type="button"
+   447→   447→            onClick={() => onCategory(c)}
+   448→   448→            className={cn('rounded-full px-3 py-1.5 text-xs border touch-target', category === c ? 'bg-primary text-primary-foreground border-transparent' : 'bg-card')}
+   449→   449→          >
+   450→   450→            {c}
+   451→   451→          </button>
+   452→   452→        ))}
+   453→   453→      </div>
+   454→   454→
+   455→   455→      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+   456→   456→        {list.map((p) => {
+   457→   457→          const line = cart[p.id]
+   458→   458→          const inCart = Boolean(line)
+   459→   459→          return (
+   460→   460→            <div
+   461→   461→              key={p.id}
+   462→   462→              className={cn(
+   463→   463→                'rounded-2xl border p-3 bg-card transition-all duration-200',
+   464→   464→                inCart ? 'border-primary ring-1 ring-primary/25' : 'border-border',
+   465→   465→                bump === p.id && 'scale-[1.02] shadow-md'
+   466→   466→              )}
+   467→   467→            >
+   468→   468→              <div className="flex items-start gap-3">
+   469→   469→                <div
+   470→   470→                  className="h-12 w-12 rounded-xl shrink-0 flex items-center justify-center font-bold text-white text-lg bg-accent text-primary"
+   471→   471→                  style={p.image ? { backgroundImage: `url(${p.image})`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}
+   472→   472→                  aria-hidden
+   473→   473→                >
+   474→   474→                  {!p.image && p.name.slice(0, 1)}
+   475→   475→                </div>
+   476→   476→                <div className="min-w-0 flex-1">
+   477→   477→                  <div className="flex items-center justify-between gap-2">
+   478→   478→                    <p className="text-sm font-bold line-clamp-1">{p.name}</p>
+   479→   479→                    <ProductHistoryPopover productId={p.id} name={p.name} bundle={catalog} />
+   480→   480→                  </div>
+   481→   481→                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
+   482→   482→                    <StockIndicator stock={p.stock} minStock={p.minStock} />
+   483→   483→                    <span className="text-[11px] num text-muted-foreground">خرید: {money(p.buyPrice)}</span>
+   484→   484→                    <span className="text-[11px] num text-muted-foreground">فروش: {money(p.sellPrice)}</span>
+   485→   485→                  </div>
+   486→   486→                </div>
+   487→   487→              </div>
+   488→   488→
+   489→   489→              <div className="flex items-center gap-2 mt-3 flex-wrap">
+   490→   490→                {/* qty stepper */}
+   491→   491→                <div className="flex items-center gap-1 rounded-xl border border-border p-1">
+   492→   492→                  <button
+   493→   493→                    type="button"
+   494→   494→                    aria-label="کاهش"
+   495→   495→                    onClick={() => setQty(p, (line?.qty ?? 0) - 1)}
+   496→   496→                    className="h-10 w-10 rounded-lg flex items-center justify-center hover:bg-accent touch-target active:scale-90 transition-transform"
+   497→   497→                  >
+   498→   498→                    <Minus className="h-4 w-4" />
+   499→   499→                  </button>
+   500→   500→                  <input
+   501→   501→                    aria-label={`تعداد ${p.name}`}
+   502→   502→                    value={line ? String(line.qty) : '۰'}
+   503→   503→                    onChange={(e) => {
+   504→   504→                      const n = Number(e.target.value.replace(/[^\d.]/g, ''))
+   505→   505→                      setQty(p, isNaN(n) ? 0 : n)
+   506→   506→                    }}
+   507→   507→                    inputMode="decimal"
+   508→   508→                    className="w-12 h-9 text-center text-sm font-bold num bg-transparent outline-none"
+   509→   509→                  />
+   510→   510→                  <button
+   511→   511→                    type="button"
+   512→   512→                    aria-label="افزایش"
+   513→   513→                    onClick={() => setQty(p, (line?.qty ?? 0) + 1)}
+   514→   514→                    className="h-10 w-10 rounded-lg flex items-center justify-center hover:bg-accent touch-target active:scale-90 transition-transform text-primary"
+   515→   515→                  >
+   516→   516→                    <Plus className="h-4 w-4" />
+   517→   517→                  </button>
+   518→   518→                </div>
+   519→   519→
+   520→   520→                {/* unit price override */}
+   521→   521→                {inCart && (
+   522→   522→                  <div className="flex items-center gap-1.5 animate-in fade-in">
+   523→   523→                    <label className="text-[11px] text-muted-foreground whitespace-nowrap">قیمت واحد:</label>
+   524→   524→                    <Input
+   525→   525→                      value={String(line.unitPrice)}
+   526→   526→                      onChange={(e) => setPrice(p, Number(e.target.value.replace(/[^\d.]/g, '')) || 0)}
+   527→   527→                      inputMode="numeric"
+   528→   528→                      className="h-10 w-28 num text-sm"
+   529→   529→                      aria-label={`قیمت واحد ${p.name}`}
+   530→   530→                    />
+   531→   531→                  </div>
+   532→   532→                )}
+   533→   533→
+   534→   534→                {inCart && (
+   535→   535→                  <span className="ms-auto text-xs num font-bold text-primary">
+   536→   536→                    {money(rowCalc(line.qty, line.unitPrice).total)}
+   537→   537→                  </span>
+   538→   538→                )}
+   539→   539→              </div>
+   540→   540→            </div>
+   541→   541→          )
+   542→   542→        })}
+   543→   543→      </div>
+   544→   544→      {list.length === 0 && <p className="text-sm text-muted-foreground text-center py-8">کالایی یافت نشد</p>}
+   545→   545→    </div>
+   546→   546→  )
+   547→   547→}
+   548→   548→
+   549→   549→// ---------- step 3: review ----------
+   550→   550→function ReviewStep({
+   551→   551→  provider, entries, receivingDate, onReceivingDate, holidaySet, paymentType, onPaymentType,
+   552→   552→  note, onNote, cartBase, cartVat, cartTotal,
+   553→   553→}: {
+   554→   554→  provider: CatalogBundle['providers'][number] | null
+   555→   555→  entries: { product: CatalogProduct; line: CartLine; row: ReturnType<typeof rowCalc> }[]
+   556→   556→  receivingDate: Date | null
+   557→   557→  onReceivingDate: (d: Date | null) => void
+   558→   558→  holidaySet: Set<string>
+   559→   559→  paymentType: 'CASH' | 'CHEQUE'
+   560→   560→  onPaymentType: (v: 'CASH' | 'CHEQUE') => void
+   561→   561→  note: string
+   562→   562→  onNote: (v: string) => void
+   563→   563→  cartBase: number
+   564→   564→  cartVat: number
+   565→   565→  cartTotal: number
+   566→   566→}) {
+   567→   567→  const closed = receivingDate ? isClosedDay(receivingDate, holidaySet) : false
+   568→   568→  return (
+   569→   569→    <div className="space-y-4">
+   570→   570→      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+   571→   571→        <div className="rounded-xl border border-border p-3">
+   572→   572→          <p className="text-xs font-bold mb-2">📅 تاریخ دریافت</p>
+   573→   573→          <JalaliDatePicker value={receivingDate} onChange={onReceivingDate} holidays={holidaySet} allowClear={false} />
+   574→   574→          <p className="text-[11px] text-muted-foreground mt-1.5">{receivingDate ? formatJalaliFull(receivingDate) : 'انتخاب نشده'}</p>
+   575→   575→        </div>
+   576→   576→        <div className="rounded-xl border border-border p-3">
+   577→   577→          <p className="text-xs font-bold mb-2">💳 نوع پرداخت</p>
+   578→   578→          <div className="grid grid-cols-2 gap-2">
+   579→   579→            <button
+   580→   580→              type="button"
+   581→   581→              aria-pressed={paymentType === 'CASH'}
+   582→   582→              onClick={() => onPaymentType('CASH')}
+   583→   583→              className={cn('rounded-xl border py-3 text-sm font-bold touch-target', paymentType === 'CASH' ? 'border-primary bg-primary/10 text-primary' : 'bg-card')}
+   584→   584→            >
+   585→   585→              💵 نقدی هنگام تحویل
+   586→   586→            </button>
+   587→   587→            <button
+   588→   588→              type="button"
+   589→   589→              aria-pressed={paymentType === 'CHEQUE'}
+   590→   590→              onClick={() => onPaymentType('CHEQUE')}
+   591→   591→              className={cn('rounded-xl border py-3 text-sm font-bold touch-target', paymentType === 'CHEQUE' ? 'border-primary bg-primary/10 text-primary' : 'bg-card')}
+   592→   592→            >
+   593→   593→              🧾 چک
+   594→   594→            </button>
+   595→   595→          </div>
+   596→   596→        </div>
+   597→   597→      </div>
+   598→   598→
+   599→   599→      {closed && (
+   600→   600→        <div className="rounded-xl border p-3 bg-[#C9A227]/10 border-[#C9A227]/40 text-sm flex items-center gap-2" role="alert">
+   601→   601→          <Ban className="h-4 w-4 shrink-0 text-[#8a6f3c]" />
+   602→   602→          <span className="font-bold text-[#8a6f3c]">روز تعطیل — دریافت انجام نمی‌شود</span>
+   603→   603→        </div>
+   604→   604→      )}
+   605→   605→
+   606→   606→      <Textarea value={note} onChange={(e) => onNote(e.target.value)} placeholder="یادداشت سفارش (اختیاری)…" className="min-h-20" aria-label="یادداشت سفارش" />
+   607→   607→
+   608→   608→      {/* summary */}
+   609→   609→      <div className="rounded-xl border border-border overflow-hidden">
+   610→   610→        <div className="bg-accent/60 px-3 py-2 text-xs font-bold flex items-center justify-between">
+   611→   611→          <span>بازبینی سفارش</span>
+   612→   612→          <span className="text-muted-foreground font-normal">{provider?.name ?? '—'}</span>
+   613→   613→        </div>
+   614→   614→        <div className="max-h-44 overflow-y-auto divide-y divide-border">
+   615→   615→          {entries.map((e) => (
+   616→   616→            <div key={e.product.id} className="flex items-center gap-2 px-3 py-2 text-xs">
+   617→   617→              <span className="font-medium line-clamp-1 flex-1">{e.product.name}</span>
+   618→   618→              <span className="num text-muted-foreground">{toFaDigits(Math.round(e.line.qty))} × {money(e.line.unitPrice)}</span>
+   619→   619→              <span className="num font-bold w-28 text-left">{money(e.row.total)}</span>
+   620→   620→            </div>
+   621→   621→          ))}
+   622→   622→        </div>
+   623→   623→        <div className="bg-card px-3 py-2.5 text-xs space-y-1 border-t border-border">
+   624→   624→          <div className="flex justify-between"><span className="text-muted-foreground">جمع کالاها</span><span className="num">{money(cartBase)}</span></div>
+   625→   625→          <div className="flex justify-between"><span className="text-muted-foreground">ارزش افزوده (۹٪)</span><span className="num">{money(cartVat)}</span></div>
+   626→   626→          <div className="flex justify-between font-bold text-sm pt-1 border-t border-border"><span>مبلغ نهایی</span><span className="num text-primary">{money(cartTotal)} تومان</span></div>
+   627→   627→        </div>
+   628→   628→      </div>
+   629→   629→    </div>
+   630→   630→  )
+   631→   631→}
+   632→   632→

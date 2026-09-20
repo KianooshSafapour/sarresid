@@ -1,0 +1,38 @@
+# Leave Scheduling — Evidence Brief (Leave Module Science)
+
+**Status:** Research document (Task 9-g) · **Web sources accessed:** 2026-09-15 · Audience: owner + the agent building the leave UI.
+**Platform context:** the leave module already ships with three policy knobs stored in `Settings.leave_policy` (default `{monthlyDays: 4, maxSameDay: 2, hourlyMaxHours: 4}`, editable via `POST /api/leaves/policy` with ranges monthlyDays 1–31, maxSameDay 1–10, hourlyMaxHours 1–12 — `src/lib/leave.ts`, `src/app/api/leaves/*`). This brief grounds those knobs in the workforce-scheduling literature and gives 5 concrete policy recommendations.
+
+## 1. What the science says
+
+**Tour scheduling is a solved *class* of problem — treat leave as a coverage input.** In retail operations research, the *tour-scheduling problem* decides staffing levels and shift "tours" to meet hour-by-hour demand; recent work explicitly models retail stores' staffing, tour scheduling and re-planning with regular and on-call workers (Pandey et al., 2025, *Computers & Operations Research* / ScienceDirect — https://www.sciencedirect.com, accessed 2026-09-15). The operational takeaway: **an absence is not an HR event, it is a coverage event** — every approved leave day removes labor from a specific day's demand curve, which for us also means a specific day's SPLH target (the platform's labor KPI).
+
+**Coverage constraints beat intuition.** Scheduling guidance across retail WFM practice converges on: (a) forecast demand per hour/day, (b) define a *minimum coverage floor* per role, (c) only then allocate absences (TimeForge, "Employee Scheduling Challenges In Retail", Apr 25, 2025 — https://timeforge.com). A leave system that caps *requests* without capping *simultaneous absences per role* silently breaks the coverage floor on Fridays and pre-Nowruz Saturdays.
+
+**Equity and transparency are performance-relevant, not soft.** A 2025 study of nurses (the scheduling-intensity benchmark discipline) found that **flexibility, transparency, equity and autonomy** in scheduling significantly drive job satisfaction at all levels (NYU Meyers, Mar 31, 2025 — https://nursing.nyu.edu/w/news/press-release/nurse-shift-schedules); schedule *control* lowers burnout and exhaustion (MDPI, "Guidelines for Reducing the Adverse Effects of Shift Work", Aug 28, 2025 — https://www.mdpi.com/2227-9032/13/17/2148). Fatigue is measurably shaped by roster patterns (shift length, timing, insufficient recovery) in an integrative review of 21 studies (PMC10060037, 2023 — https://pmc.ncbi.nlm.nih.gov/articles/PMC10060037).
+
+**Iranian labor law sets the legal envelope** (citations for the policy numbers below): annual earned leave accrues at **2.5 days per month ≈ 26 working days/year (≈192 hours)** (https://pact.ir ; https://www.sepidarsystem.com, Sep 27, 2025 ; https://chargoon.com, Apr 29, 2024); per Article 66 at most **9 days** may be carried to the next year (https://hrs-tax.com, May 25, 2024); **hourly leave** converts at **7h20m = 1 day** and a single hourly leave is capped at 4 hours/day in common payroll practice (https://sarayehesabdar.ir, Apr 29, 2026). *Exact application to the shop's contracts: needs employer/HR confirmation.*
+
+## 2. Five practical policy recommendations (mapped to existing knobs)
+
+1. **Derive `maxSameDay` from the coverage floor, not from mood.** Set `maxSameDay` ≈ ⌊present-today requirement ÷ 2⌋ per team — for a 6–8 person shop floor the default **2** is right; **make it role-aware in the UI**: warn the approver when approving would take out both cashiers or both inventory staff on the same day (coverage-floor check per Pandey 2025 / TimeForge 2025). Suggested rule surfaced in the approval dialog: «با این تأیید، X نفر از Y نفر این روز خارج می‌شوند».
+
+2. **Anchor `monthlyDays` to legal accrual — as a *request* cap, not a quota.** Accrual is 2.5 days/month (26/year, ≤9 carryover), so a monthly request cap of **3–4** keeps any month's absences inside the legal envelope and prevents year-end bunching (the "use it or lose it" December/Esfand stampede). Show the running balance as «مانده مرخصی سالانه (از ۲۶ روز)» rather than a monthly pool, so staff see the law's arithmetic, not an arbitrary number.
+
+3. **Keep `hourlyMaxHours = 4` and enforce the 7h20m conversion in stats.** Hourly leave max 4h/day matches both common payroll practice and the module's default; the payroll-side conversion (7h20m hourly = 1 earned day) should be displayed on the monthly summary so hourly splits never silently consume more earned days than managers expect. Guard in code: >4h in a day → prompt to file a full-day request instead (the API already enforces the cap with a Persian message).
+
+4. **Equity rule for contested dates (transparent fair-share queue).** When requests exceed `maxSameDay` on a high-demand date (pre-Nowruz week, Eid days, inventory days), auto-rank by *least-recently-granted leave* (fair-share) and show the ranking to everyone requesting — equity + transparency are the two factors most consistently linked to schedule satisfaction (NYU 2025). Concretely: the leave list already stores requester/date; add `lastGrantedAt` per user and a «نوبت شما» chip; the approver sees ranked candidates, not a first-come race.
+
+5. **Fatigue-safe returns and an advance-notice window.** Mirror the shift-work guidelines in two soft rules: (a) **no approval for a leave day that starts <10h after a closing shift ends** (recovery time; PMC 2023 fatigue review), (b) **≥72h advance notice** for full-day leave except emergencies (re-planning cost; Pandey 2025). Implementation is a warning chip in the request form + an "override reason" field for the manager — assistant-not-surveillance, consistent with the platform's briefing philosophy. These are configurable defaults, not hard blocks.
+
+## 3. Explicit non-goals / uncertainties
+- Shift-pattern *generation* (who works which tour) is a full tour-scheduling optimization problem — out of scope for the leave module; the leave module only consumes and respects the coverage floor. Automated tour optimization stays in the RESEARCH-FOUNDATION backlog (B3 queueing/staffing).
+- Legal numbers above describe general private-sector labor law practice; **the shop's specific contracts, industry rulings and any union/insurance nuances need HR/vendor confirmation** before the numbers are hardcoded into policy copy.
+
+## 4. Sources (accessed 2026-09-15)
+1. Pandey, P. et al. (2025), "Staffing, tour scheduling, and re-planning in specialty retail stores" (regular + on-call workers): https://www.sciencedirect.com (search-verified title/venue; paywalled full text).
+2. NYU Rory Meyers College of Nursing (Mar 31, 2025), "Nurses Offer Insights, Solutions for Optimal Shift Schedules" — flexibility, transparency, equity, autonomy: https://nursing.nyu.edu/w/news/press-release/nurse-shift-schedules
+3. PMC (2023), "Effects of nurses' schedule characteristics on fatigue — an integrative review (21 studies)": https://pmc.ncbi.nlm.nih.gov/articles/PMC10060037
+4. MDPI Healthcare (Aug 28, 2025), "Guidelines for Reducing the Adverse Effects of Shift Work" — schedule control vs burnout: https://www.mdpi.com/2227-9032/13/17/2148
+5. TimeForge (Apr 25, 2025), "Employee Scheduling Challenges In Retail: Optimization": https://timeforge.com
+6. Iranian labor-law references: https://pact.ir (2.5 days/month, 26/year) · https://www.sepidarsystem.com (Sep 27, 2025) · https://chargoon.com (Apr 29, 2024, 192 hours) · https://hrs-tax.com (May 25, 2024, Article 66, ≤9 days carryover) · https://sarayehesabdar.ir (Apr 29, 2026, hourly leave 7h20m = 1 day, 4h/day cap)

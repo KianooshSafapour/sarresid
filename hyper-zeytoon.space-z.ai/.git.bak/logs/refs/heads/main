@@ -1,0 +1,30 @@
+0000000000000000000000000000000000000000 327ab7080d30288444e2293f6de0004aeda94c08 Z User <z@container> 1789077202 +0000	commit (initial): Initial commit
+327ab7080d30288444e2293f6de0004aeda94c08 d4b7e4f950f6ee8b3565f7857705790d62509340 Z User <z@container> 1789086108 +0000	commit: b3d13f03-723b-4ebf-afe0-3064c4bf7754
+d4b7e4f950f6ee8b3565f7857705790d62509340 3b1b78a211315fa70ec8b11f2db801176e5b2a93 Z User <z@container> 1789087186 +0000	commit: 5a2c4c0e-649b-4df2-bc88-91618203517c
+3b1b78a211315fa70ec8b11f2db801176e5b2a93 22a30a508d2ef0922bc41b8ff1096115b569114d Z User <z@container> 1789089021 +0000	commit: 93f3d79b-e698-4667-ae98-504a3b999ca5
+22a30a508d2ef0922bc41b8ff1096115b569114d 5621e10740acb67df673b62e8821e478d1a09fbe Z User <z@container> 1789090024 +0000	commit: fea626a5-865c-4b63-af18-e8852caacc2a
+5621e10740acb67df673b62e8821e478d1a09fbe b199a4a9c36c662644d4ef9cb9f65b2ff7293ee7 Z User <z@container> 1789091324 +0000	commit: 8eed1582-3b0d-4ecd-ba0b-72f456c7d2fc
+b199a4a9c36c662644d4ef9cb9f65b2ff7293ee7 882884cbb1b97a3997bddf607a49d1798ff4ea0d Z User <z@container> 1789093168 +0000	commit: bebce8a5-f71a-4c42-a14c-5614c578db28
+882884cbb1b97a3997bddf607a49d1798ff4ea0d 901a72df54c0fbbbc1d588d60150a3378c13230f Z User <z@container> 1789094695 +0000	commit: 94ac0667-bf89-46b0-a01f-b6086e25abd7
+901a72df54c0fbbbc1d588d60150a3378c13230f b7eb3b165220516b8641f4996b463bc6229a1dab Z User <z@container> 1789096277 +0000	commit: 41f64361-e4df-45ea-bb9b-9f9e54de2601
+b7eb3b165220516b8641f4996b463bc6229a1dab df1f71352ff7ec6858f498bf049e8ad9d054dbd3 Z User <z@container> 1789097117 +0000	commit: 055a33a8-4cb9-47d5-89e9-98b260f10dac
+df1f71352ff7ec6858f498bf049e8ad9d054dbd3 eee59b8b39e4bd062516a8685b17cc1c3d5c3894 Z User <z@container> 1789098689 +0000	commit: e417ba0e-98dc-4557-9226-bbee66dae1b5
+eee59b8b39e4bd062516a8685b17cc1c3d5c3894 561a0701a92c737d5bfe3b40ed4c3c034847f429 Z User <z@container> 1789099760 +0000	commit: 6007df77-ba3c-45b9-8610-849bb14b359f
+561a0701a92c737d5bfe3b40ed4c3c034847f429 6f3821ba0938ae4753dda5da394e6cd6800ab652 Z User <z@container> 1789135713 +0000	commit (amend): 6007df77-ba3c-45b9-8610-849bb14b359f
+6f3821ba0938ae4753dda5da394e6cd6800ab652 d7778dd492f427ef7d60a93306f8b8de46e4a458 Z User <z@container> 1789148564 +0000	commit (amend): 6007df77-ba3c-45b9-8610-849bb14b359f
+d7778dd492f427ef7d60a93306f8b8de46e4a458 2a6ee6c7ea06a04c73a767dc45d40a28554b9e8e Z User <z@container> 1789156357 +0000	commit: v0.1-alpha 'Hello, World' — stable baseline: full platform (orders workflow, margin guard, cheques w/ holiday guard, Holoo xls, planogram, tasks/SOP/gamification, wall, feedback, DM socket.io :3003, briefings, reports XLS, price-check, 17 accounts, Jalali RTL Persian UI, girih/pistachio design system)
+2a6ee6c7ea06a04c73a767dc45d40a28554b9e8e 0e4b1cac6f2d773ae1af22fb85663eba28c05e12 Z User <z@container> 1789159738 +0000	commit: v0.2-alpha: science toolkit + research hub + demo studio + mobile session fix
+0e4b1cac6f2d773ae1af22fb85663eba28c05e12 2cd923002caaad6ae4be370b9fd681dbac576b6a Z User <z@container> 1789159833 +0000	commit: eb4e83cb-1074-415f-80a7-94814388ca1d
+2cd923002caaad6ae4be370b9fd681dbac576b6a 1d77729e73933a8ad4e03aac73b93a2a6ba3d8fa Z User <z@container> 1789222006 +0000	commit (amend): eb4e83cb-1074-415f-80a7-94814388ca1d
+1d77729e73933a8ad4e03aac73b93a2a6ba3d8fa ec62cba408d396203363f54f73507d7416838d6e Z User <z@container> 1789311358 +0000	commit (amend): eb4e83cb-1074-415f-80a7-94814388ca1d
+ec62cba408d396203363f54f73507d7416838d6e f5ce25f0539a65c4d47a9ec1ce62aa9e5763ca98 Z User <z@container> 1789448416 +0000	commit (amend): eb4e83cb-1074-415f-80a7-94814388ca1d
+f5ce25f0539a65c4d47a9ec1ce62aa9e5763ca98 b6c6042e973157b1be184cb97ed72018342c747e Z User <z@container> 1789507183 +0000	commit: v0.2-alpha round 12: cheque due-date planner + flexibility engine + hybrid document archive
+b6c6042e973157b1be184cb97ed72018342c747e bf1b8e795831d1eaa30f2e581aff088e5f276601 Z User <z@container> 1789538669 +0000	commit (amend): v0.2-alpha round 12: cheque due-date planner + flexibility engine + hybrid document archive
+bf1b8e795831d1eaa30f2e581aff088e5f276601 210d7d0f32363d5e71721f299444853520bf0cdb Z User <z@container> 1789556782 +0000	commit (amend): v0.2-alpha round 12: cheque due-date planner + flexibility engine + hybrid document archive
+210d7d0f32363d5e71721f299444853520bf0cdb ea6b5996c54949b003aa05f0395aeab6aee0235b Z User <z@container> 1789563300 +0000	commit: a6c528d9-75ff-4bf6-b2f6-444e7d054d7a
+ea6b5996c54949b003aa05f0395aeab6aee0235b 2ec98d7bc28d632705a22fd5d9f2612e58cb985e Z User <z@container> 1789630780 +0000	commit (amend): a6c528d9-75ff-4bf6-b2f6-444e7d054d7a
+2ec98d7bc28d632705a22fd5d9f2612e58cb985e 69339d2bad6801629954ef052b4fd4221cf48dab Z User <z@container> 1789812919 +0000	commit: 265e1e5e-97be-4a86-944d-053ba9b477ff
+69339d2bad6801629954ef052b4fd4221cf48dab d3772f7b157f2d3109c141efcfb1322de8d02cb5 Z User <z@container> 1789828917 +0000	commit (amend): 265e1e5e-97be-4a86-944d-053ba9b477ff
+d3772f7b157f2d3109c141efcfb1322de8d02cb5 006a3d139965aa1ec77e5e54daa552cb5e1e8a11 Z User <z@container> 1789907081 +0000	commit: 614431e5-a045-496f-86c6-93ce06ace826
+006a3d139965aa1ec77e5e54daa552cb5e1e8a11 3bcd1b8c23331bd80391cbb2b6770f176c04aa33 Z User <z@container> 1789914596 +0000	commit (amend): 614431e5-a045-496f-86c6-93ce06ace826
+3bcd1b8c23331bd80391cbb2b6770f176c04aa33 32892a068e586cb1b834477c2038acc701d5886f Z User <z@container> 1789921633 +0000	commit (amend): 614431e5-a045-496f-86c6-93ce06ace826

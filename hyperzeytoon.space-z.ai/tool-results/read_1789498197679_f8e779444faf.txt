@@ -1,0 +1,851 @@
+     1→'use client'
+     2→
+     3→import * as React from 'react'
+     4→import { api, downloadBlob } from '@/lib/api'
+     5→import { useApp } from '@/store/app'
+     6→import { SectionHeader, EmptyState, LoadingBlock, StockIndicator, StatusBadge, OrnateDivider } from '@/components/platform/ui/shared'
+     7→import { money, toFaDigits, formatJalaliFull } from '@/lib/jalali'
+     8→import { Button } from '@/components/ui/button'
+     9→import { Input } from '@/components/ui/input'
+    10→import { Label } from '@/components/ui/label'
+    11→import { Badge } from '@/components/ui/badge'
+    12→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    13→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+    14→import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+    15→import { ToastAction } from '@/components/ui/toast'
+    16→import { useToast } from '@/hooks/use-toast'
+    17→import { Handshake, Plus, Loader2, Minus, ShoppingCart, Phone, Building2, ChevronDown, FileText, Printer, Download, Landmark, ReceiptText, TrendingUp, BookText } from 'lucide-react'
+    18→
+    19→interface CompanyProduct {
+    20→  id: string
+    21→  name: string
+    22→  brand: string | null
+    23→  sellPrice: number
+    24→  stock: number
+    25→  minStock: number
+    26→  image: string | null
+    27→  unit: string
+    28→}
+    29→interface ProviderCompanyDTO {
+    30→  id: string
+    31→  name: string
+    32→  kind: string
+    33→  note: string | null
+    34→  isDirect: boolean
+    35→  productCount: number
+    36→  products: CompanyProduct[]
+    37→}
+    38→interface ProviderDTO {
+    39→  id: string
+    40→  name: string
+    41→  phone: string | null
+    42→  kind: string
+    43→  color: string
+    44→  notes: string | null
+    45→  companies: ProviderCompanyDTO[]
+    46→}
+    47→interface CompanyDTO {
+    48→  id: string
+    49→  name: string
+    50→  kind: string
+    51→  providerCount: number
+    52→}
+    53→
+    54→interface StatementRow {
+    55→  id: string
+    56→  type: 'ORDER' | 'PAYMENT' | 'CHEQUE'
+    57→  date: string
+    58→  label: string
+    59→  ref: string
+    60→  debit: number
+    61→  credit: number
+    62→  balance: number
+    63→}
+    64→interface StatementDTO {
+    65→  provider: { id: string; name: string; phone: string | null; kind: string; color: string; companies: string[] }
+    66→  rows: StatementRow[]
+    67→  summary: {
+    68→    purchases: number
+    69→    paidOther: number
+    70→    settledCheques: number
+    71→    balance: number
+    72→    ordersCount: number
+    73→    cancelledCount: number
+    74→    openChequeCount: number
+    75→    openChequeAmount: number
+    76→    lastActivityAt: string | null
+    77→  }
+    78→  generatedAt: string
+    79→  generatedByName: string
+    80→}
+    81→
+    82→const KIND_LABELS: Record<string, string> = {
+    83→  DIRECT: 'مستقیم از تولیدکننده',
+    84→  DISTRIBUTOR: 'مرکز توزیع',
+    85→}
+    86→const COMPANY_KINDS: Record<string, string> = {
+    87→  MANUFACTURER: 'تولیدکننده',
+    88→  DISTRIBUTION_CENTER: 'مرکز توزیع',
+    89→  BOTH: 'تولید و توزیع',
+    90→}
+    91→const CARD_COLORS = ['#3E7C59', '#C9A227', '#B07D2B', '#B33A3A', '#8A6F3C', '#7D5BA6']
+    92→function colorOf(name: string) {
+    93→  let h = 0
+    94→  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
+    95→  return CARD_COLORS[h % CARD_COLORS.length]
+    96→}
+    97→
+    98→export function Providers() {
+    99→  const { toast } = useToast()
+   100→  const user = useApp((s) => s.user)
+   101→  const setSection = useApp((s) => s.setSection)
+   102→  const setQuickAction = useApp((s) => s.setQuickAction)
+   103→  const isManager = !!user?.isManager
+   104→
+   105→  const [providers, setProviders] = React.useState<ProviderDTO[]>([])
+   106→  const [loading, setLoading] = React.useState(true)
+   107→  const [selectedId, setSelectedId] = React.useState<string | null>(null)
+   108→  const [activeCompany, setActiveCompany] = React.useState<Record<string, string>>({})
+   109→
+   110→  // create dialog
+   111→  const [createOpen, setCreateOpen] = React.useState(false)
+   112→  const [saving, setSaving] = React.useState(false)
+   113→  const [form, setForm] = React.useState({ name: '', phone: '', kind: 'DISTRIBUTOR' })
+   114→  const [companies, setCompanies] = React.useState<CompanyDTO[]>([])
+   115→  const [picked, setPicked] = React.useState<string[]>([])
+   116→  const [newCompanyOpen, setNewCompanyOpen] = React.useState(false)
+   117→  const [newCompany, setNewCompany] = React.useState({ name: '', kind: 'MANUFACTURER' })
+   118→  const [creatingCompany, setCreatingCompany] = React.useState(false)
+   119→
+   120→  // statement dialog
+   121→  const [statement, setStatement] = React.useState<StatementDTO | null>(null)
+   122→  const [statementOpen, setStatementOpen] = React.useState(false)
+   123→  const [statementLoading, setStatementLoading] = React.useState(false)
+   124→  const [exportingStatement, setExportingStatement] = React.useState(false)
+   125→  const [exportingAll, setExportingAll] = React.useState(false)
+   126→  const canSeeStatement = isManager || !!user?.roleKeys.includes('accountant')
+   127→
+   128→  const load = React.useCallback(async () => {
+   129→    setLoading(true)
+   130→    try {
+   131→      const data = await api<{ providers: ProviderDTO[] }>('/api/providers')
+   132→      setProviders(data.providers)
+   133→      setSelectedId((cur) => cur ?? data.providers[0]?.id ?? null)
+   134→    } catch (e) {
+   135→      toast({ title: 'خطا در دریافت تأمین‌کنندگان', description: (e as Error).message, variant: 'destructive' })
+   136→    } finally {
+   137→      setLoading(false)
+   138→    }
+   139→  }, [toast])
+   140→
+   141→  React.useEffect(() => {
+   142→    load()
+   143→  }, [load])
+   144→
+   145→  const loadCompanies = React.useCallback(async () => {
+   146→    try {
+   147→      const data = await api<{ companies: CompanyDTO[] }>('/api/companies')
+   148→      setCompanies(data.companies)
+   149→    } catch (e) {
+   150→      toast({ title: 'خطا در دریافت شرکت‌ها', description: (e as Error).message, variant: 'destructive' })
+   151→    }
+   152→  }, [toast])
+   153→
+   154→  const openCreate = async () => {
+   155→    setForm({ name: '', phone: '', kind: 'DISTRIBUTOR' })
+   156→    setPicked([])
+   157→    setNewCompanyOpen(false)
+   158→    setCreateOpen(true)
+   159→    await loadCompanies()
+   160→  }
+   161→
+   162→  const submitCreate = async () => {
+   163→    if (!form.name.trim()) {
+   164→      toast({ title: 'نام تأمین‌کننده الزامی است', variant: 'destructive' })
+   165→      return
+   166→    }
+   167→    setSaving(true)
+   168→    try {
+   169→      await api('/api/providers', { body: { ...form, companyIds: picked } })
+   170→      toast({ title: 'تأمین‌کننده ثبت شد', description: form.name })
+   171→      setCreateOpen(false)
+   172→      load()
+   173→    } catch (e) {
+   174→      toast({ title: 'ثبت ناموفق', description: (e as Error).message, variant: 'destructive' })
+   175→    } finally {
+   176→      setSaving(false)
+   177→    }
+   178→  }
+   179→
+   180→  const submitCompany = async () => {
+   181→    if (!newCompany.name.trim()) {
+   182→      toast({ title: 'نام شرکت الزامی است', variant: 'destructive' })
+   183→      return
+   184→    }
+   185→    setCreatingCompany(true)
+   186→    try {
+   187→      const res = await api<{ id: string }>('/api/companies', { body: newCompany })
+   188→      toast({ title: 'شرکت ثبت شد', description: newCompany.name })
+   189→      setPicked((p) => (res.id ? [...p, res.id] : p))
+   190→      setNewCompany({ name: '', kind: 'MANUFACTURER' })
+   191→      setNewCompanyOpen(false)
+   192→      await loadCompanies()
+   193→    } catch (e) {
+   194→      toast({ title: 'ثبت شرکت ناموفق', description: (e as Error).message, variant: 'destructive' })
+   195→    } finally {
+   196→      setCreatingCompany(false)
+   197→    }
+   198→  }
+   199→
+   200→  const openStatement = async (providerId: string) => {
+   201→    setStatementOpen(true)
+   202→    setStatementLoading(true)
+   203→    try {
+   204→      const data = await api<StatementDTO>(`/api/providers/${providerId}/statement`)
+   205→      setStatement(data)
+   206→    } catch (e) {
+   207→      toast({ title: 'خطا در دریافت صورت‌حساب', description: (e as Error).message, variant: 'destructive' })
+   208→      setStatementOpen(false)
+   209→    } finally {
+   210→      setStatementLoading(false)
+   211→    }
+   212→  }
+   213→
+   214→  const exportStatementXlsx = async () => {
+   215→    if (!statement) return
+   216→    setExportingStatement(true)
+   217→    try {
+   218→      await downloadBlob(
+   219→        `/api/providers/${statement.provider.id}/statement?format=xlsx`,
+   220→        `statement-${statement.provider.name.replace(/\s+/g, '-')}.xlsx`
+   221→      )
+   222→      toast({ title: 'صورت‌حساب اکسل دانلود شد', description: 'قابل بایگانی در پرونده تأمین‌کننده' })
+   223→    } catch (e) {
+   224→      toast({ title: 'خروجی اکسل ناموفق', description: e instanceof Error ? e.message : '', variant: 'destructive' })
+   225→    } finally {
+   226→      setExportingStatement(false)
+   227→    }
+   228→  }
+   229→
+   230→  const exportAllStatements = async () => {
+   231→    setExportingAll(true)
+   232→    try {
+   233→      await downloadBlob('/api/providers/statements-bulk', 'statements-all-providers.xlsx')
+   234→      toast({ title: 'کتاب صورت‌حساب جمعی دانلود شد', description: 'یک برگ خلاصه + یک برگ برای هر تأمین‌کننده فعال' })
+   235→    } catch (e) {
+   236→      toast({ title: 'خروجی جمعی ناموفق', description: e instanceof Error ? e.message : '', variant: 'destructive' })
+   237→    } finally {
+   238→      setExportingAll(false)
+   239→    }
+   240→  }
+   241→
+   242→  // ---------- quick order contract ----------
+   243→  // localStorage keys consumed by the Orders section (task 2-a / orders team):
+   244→  //   hz_prefill_provider  = providerId string
+   245→  //   hz_prefill_items     = JSON [{productId, qty}]
+   246→  const quickOrder = (providerId: string, productId: string, qty: number) => {
+   247→    try {
+   248→      window.localStorage.setItem('hz_prefill_provider', providerId)
+   249→      window.localStorage.setItem('hz_prefill_items', JSON.stringify([{ productId, qty: Math.max(1, qty) }]))
+   250→    } catch {
+   251→      /* storage unavailable — ignore */
+   252→    }
+   253→    setQuickAction('new-order')
+   254→    toast({
+   255→      title: 'به سفارش‌ساز منتقل شوید',
+   256→      description: 'کالا و تعداد آماده شد؛ سفارش جدید را تکمیل کنید.',
+   257→      action: (
+   258→        <ToastAction altText="رفتن به سفارش‌ها" onClick={() => setSection('orders')}>
+   259→          رفتن به سفارش‌ها
+   260→        </ToastAction>
+   261→      ),
+   262→      duration: 8000,
+   263→    })
+   264→  }
+   265→
+   266→  const selected = providers.find((p) => p.id === selectedId) ?? null
+   267→
+   268→  return (
+   269→    <div className="space-y-4">
+   270→      <SectionHeader
+   271→        icon={<Handshake className="h-6 w-6" />}
+   272→        title="تأمین‌کنندگان"
+   273→        subtitle={`${toFaDigits(providers.length)} تأمین‌کننده در شبکه تأمین`}
+   274→        actions={
+   275→          <div className="flex flex-wrap items-center gap-2">
+   276→            {canSeeStatement && (
+   277→              <Button
+   278→                variant="outline"
+   279→                onClick={exportAllStatements}
+   280→                disabled={exportingAll}
+   281→                className="min-h-11 gap-1.5 border-[#C9A227]/40 text-[#8A6F3C] hover:bg-[#C9A227]/10"
+   282→              >
+   283→                {exportingAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <BookText className="h-4 w-4" />}
+   284→                صورت‌حساب همه (اکسل)
+   285→              </Button>
+   286→            )}
+   287→            {isManager ? (
+   288→              <Button onClick={openCreate} className="min-h-11">
+   289→                <Plus className="h-4 w-4" /> تأمین‌کننده جدید
+   290→              </Button>
+   291→            ) : null}
+   292→          </div>
+   293→        }
+   294→      />
+   295→
+   296→      {loading ? (
+   297→        <LoadingBlock rows={4} />
+   298→      ) : providers.length === 0 ? (
+   299→        <EmptyState
+   300→          icon={<Handshake />}
+   301→          title="تأمین‌کننده‌ای ثبت نشده است"
+   302→          description="اولین تأمین‌کننده شبکه تأمین را اضافه کنید."
+   303→          action={
+   304→            isManager ? (
+   305→              <Button onClick={openCreate} className="min-h-11">
+   306→                <Plus className="h-4 w-4" /> تأمین‌کننده جدید
+   307→              </Button>
+   308→            ) : undefined
+   309→          }
+   310→        />
+   311→      ) : (
+   312→        <>
+   313→          {/* ---------- provider cards ---------- */}
+   314→          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+   315→            {providers.map((p) => (
+   316→              <button
+   317→                key={p.id}
+   318→                type="button"
+   319→                onClick={() => setSelectedId(p.id)}
+   320→                aria-pressed={selectedId === p.id}
+   321→                className={`glow-border-static rounded-2xl border bg-card p-4 text-right transition-all focus-visible:ring-2 focus-visible:ring-ring ${
+   322→                  selectedId === p.id ? 'border-primary ring-2 ring-primary/30' : 'border-border hover:-translate-y-0.5'
+   323→                }`}
+   324→              >
+   325→                <div className="flex items-start justify-between gap-2">
+   326→                  <div className="min-w-0">
+   327→                    <p className="font-bold truncate">{p.name}</p>
+   328→                    <p className="text-xs text-muted-foreground mt-1 num" dir="ltr">
+   329→                      {p.phone ? toFaDigits(p.phone) : '—'}
+   330→                    </p>
+   331→                  </div>
+   332→                  <StatusBadge
+   333→                    label={KIND_LABELS[p.kind] ?? p.kind}
+   334→                    color={p.kind === 'DIRECT' ? '#3E7C59' : '#B07D2B'}
+   335→                  />
+   336→                </div>
+   337→                <div className="flex flex-wrap gap-1 mt-3">
+   338→                  {p.companies.length === 0 && (
+   339→                    <span className="text-xs text-muted-foreground">بدون شرکت</span>
+   340→                  )}
+   341→                  {p.companies.map((c) => (
+   342→                    <Badge key={c.id} variant="outline" className="text-[10px] bg-accent">
+   343→                      <Building2 className="h-3 w-3 me-1" />
+   344→                      {c.name}
+   345→                    </Badge>
+   346→                  ))}
+   347→                </div>
+   348→                <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+   349→                  <span className="num">{toFaDigits(p.companies.length)} شرکت</span>
+   350→                  <span className="inline-flex items-center gap-1">
+   351→                    {selectedId === p.id ? 'بستن جزئیات' : 'مشاهده محصولات'}
+   352→                    <ChevronDown className={`h-3.5 w-3.5 transition-transform ${selectedId === p.id ? 'rotate-180' : ''}`} />
+   353→                  </span>
+   354→                </div>
+   355→              </button>
+   356→            ))}
+   357→          </div>
+   358→
+   359→          {/* ---------- expanded panel ---------- */}
+   360→          {selected && (
+   361→            <section className="rounded-2xl border border-border bg-card p-4 space-y-4" aria-label={`محصولات ${selected.name}`}>
+   362→              <div className="flex flex-wrap items-center justify-between gap-2">
+   363→                <h2 className="font-bold flex items-center gap-2">
+   364→                  <ShoppingCart className="h-4 w-4 text-primary" />
+   365→                  محصولات {selected.name}
+   366→                </h2>
+   367→                <div className="flex items-center gap-2">
+   368→                  {selected.phone && (
+   369→                    <a
+   370→                      href={`tel:${selected.phone}`}
+   371→                      className="text-xs text-primary inline-flex items-center gap-1.5 min-h-11 md:min-h-0"
+   372→                    >
+   373→                      <Phone className="h-3.5 w-3.5" />
+   374→                      <span className="num" dir="ltr">{toFaDigits(selected.phone)}</span>
+   375→                    </a>
+   376→                  )}
+   377→                  {(isManager || user?.roleKeys.includes('accountant')) && (
+   378→                    <Button
+   379→                      variant="outline"
+   380→                      size="sm"
+   381→                      className="min-h-11 md:min-h-9 gap-1.5 border-[#C9A227]/40 text-[#8A6F3C] hover:bg-[#C9A227]/10"
+   382→                      onClick={() => openStatement(selected.id)}
+   383→                    >
+   384→                      <FileText className="h-3.5 w-3.5" /> صورت‌حساب
+   385→                    </Button>
+   386→                  )}
+   387→                </div>
+   388→              </div>
+   389→
+   390→              {selected.companies.length === 0 ? (
+   391→                <EmptyState icon={<Building2 />} title="شرکتی به این تأمین‌کننده متصل نیست" description="از مدیریت، شرکت‌ها را به این تأمین‌کننده اضافه کنید." />
+   392→              ) : (
+   393→                <>
+   394→                  <div className="flex flex-wrap gap-1.5">
+   395→                    {selected.companies.map((c, i) => {
+   396→                      const cur = activeCompany[selected.id] ?? selected.companies[0].id
+   397→                      const active = cur === c.id
+   398→                      return (
+   399→                        <button
+   400→                          key={c.id}
+   401→                          type="button"
+   402→                          onClick={() => setActiveCompany((m) => ({ ...m, [selected.id]: c.id }))}
+   403→                          className={`rounded-full px-3 py-2 text-xs font-medium border transition-colors min-h-11 md:min-h-0 ${
+   404→                            active ? 'text-white border-transparent' : 'bg-card text-foreground/80 hover:bg-accent'
+   405→                          }`}
+   406→                          style={active ? { backgroundColor: CARD_COLORS[i % CARD_COLORS.length] } : { borderColor: `${CARD_COLORS[i % CARD_COLORS.length]}55` }}
+   407→                        >
+   408→                          {c.name}
+   409→                          <span className="num opacity-70"> ({toFaDigits(c.productCount)})</span>
+   410→                        </button>
+   411→                      )
+   412→                    })}
+   413→                  </div>
+   414→
+   415→                  {(() => {
+   416→                    const cur = activeCompany[selected.id] ?? selected.companies[0].id
+   417→                    const company = selected.companies.find((c) => c.id === cur)
+   418→                    if (!company) return null
+   419→                    if (company.products.length === 0) {
+   420→                      return (
+   421→                        <EmptyState
+   422→                          icon={<ShoppingCart />}
+   423→                          title="محصولی برای این شرکت پیدا نشد"
+   424→                          description="بر اساس برند کالاها تطبیق انجام شد؛ موردی یافت نشد."
+   425→                        />
+   426→                      )
+   427→                    }
+   428→                    return (
+   429→                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+   430→                        {company.products.map((prod) => (
+   431→                          <ProviderProductCard
+   432→                            key={prod.id}
+   433→                            product={prod}
+   434→                            companyName={company.name}
+   435→                            onQuickOrder={(qty) => quickOrder(selected.id, prod.id, qty)}
+   436→                          />
+   437→                        ))}
+   438→                      </div>
+   439→                    )
+   440→                  })()}
+   441→                </>
+   442→              )}
+   443→            </section>
+   444→          )}
+   445→        </>
+   446→      )}
+   447→
+   448→      {/* ---------- account statement dialog ---------- */}
+   449→      <StatementDialog
+   450→        open={statementOpen}
+   451→        onOpenChange={setStatementOpen}
+   452→        data={statement}
+   453→        loading={statementLoading}
+   454→        onExport={exportStatementXlsx}
+   455→        exporting={exportingStatement}
+   456→      />
+   457→
+   458→      {/* ---------- create provider dialog ---------- */}
+   459→      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+   460→        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto" dir="rtl">
+   461→          <DialogHeader className="text-right">
+   462→            <DialogTitle>تأمین‌کننده جدید</DialogTitle>
+   463→            <DialogDescription>اطلاعات تأمین‌کننده و شرکت‌های مرتبط را ثبت کنید.</DialogDescription>
+   464→          </DialogHeader>
+   465→          <div className="space-y-3">
+   466→            <div className="space-y-1">
+   467→              <Label htmlFor="pr-name">نام تأمین‌کننده *</Label>
+   468→              <Input id="pr-name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+   469→            </div>
+   470→            <div className="grid grid-cols-2 gap-3">
+   471→              <div className="space-y-1">
+   472→                <Label htmlFor="pr-phone">تلفن</Label>
+   473→                <Input id="pr-phone" className="num" inputMode="tel" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} />
+   474→              </div>
+   475→              <div className="space-y-1">
+   476→                <Label>نوع</Label>
+   477→                <Select value={form.kind} onValueChange={(v) => setForm((f) => ({ ...f, kind: v }))}>
+   478→                  <SelectTrigger aria-label="نوع تأمین‌کننده"><SelectValue /></SelectTrigger>
+   479→                  <SelectContent>
+   480→                    <SelectItem value="DIRECT">مستقیم از تولیدکننده</SelectItem>
+   481→                    <SelectItem value="DISTRIBUTOR">مرکز توزیع</SelectItem>
+   482→                  </SelectContent>
+   483→                </Select>
+   484→              </div>
+   485→            </div>
+   486→            <div className="space-y-2">
+   487→              <div className="flex items-center justify-between">
+   488→                <Label>شرکت‌ها</Label>
+   489→                <Button variant="ghost" size="sm" className="min-h-9" onClick={() => setNewCompanyOpen((v) => !v)}>
+   490→                  <Plus className="h-3.5 w-3.5" /> شرکت جدید
+   491→                </Button>
+   492→              </div>
+   493→              {newCompanyOpen && (
+   494→                <div className="rounded-xl border border-dashed border-border p-3 space-y-2 bg-accent/30">
+   495→                  <Input
+   496→                    placeholder="نام شرکت…"
+   497→                    value={newCompany.name}
+   498→                    onChange={(e) => setNewCompany((c) => ({ ...c, name: e.target.value }))}
+   499→                  />
+   500→                  <div className="flex gap-2">
+   501→                    <Select value={newCompany.kind} onValueChange={(v) => setNewCompany((c) => ({ ...c, kind: v }))}>
+   502→                      <SelectTrigger className="flex-1" aria-label="نوع شرکت"><SelectValue /></SelectTrigger>
+   503→                      <SelectContent>
+   504→                        <SelectItem value="MANUFACTURER">تولیدکننده</SelectItem>
+   505→                        <SelectItem value="DISTRIBUTION_CENTER">مرکز توزیع</SelectItem>
+   506→                        <SelectItem value="BOTH">تولید و توزیع</SelectItem>
+   507→                      </SelectContent>
+   508→                    </Select>
+   509→                    <Button variant="secondary" onClick={submitCompany} disabled={creatingCompany} className="min-h-11">
+   510→                      {creatingCompany ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+   511→                      ثبت شرکت
+   512→                    </Button>
+   513→                  </div>
+   514→                </div>
+   515→              )}
+   516→              <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto rounded-xl border border-border p-2">
+   517→                {companies.length === 0 && <span className="text-xs text-muted-foreground p-1">شرکتی ثبت نشده است</span>}
+   518→                {companies.map((c) => {
+   519→                  const active = picked.includes(c.id)
+   520→                  return (
+   521→                    <button
+   522→                      key={c.id}
+   523→                      type="button"
+   524→                      aria-pressed={active}
+   525→                      onClick={() => setPicked((p) => (active ? p.filter((x) => x !== c.id) : [...p, c.id]))}
+   526→                      className={`rounded-full px-3 py-1.5 text-xs border transition-colors min-h-9 ${
+   527→                        active ? 'text-white border-transparent bg-primary' : 'bg-card hover:bg-accent'
+   528→                      }`}
+   529→                    >
+   530→                      {c.name}
+   531→                    </button>
+   532→                  )
+   533→                })}
+   534→              </div>
+   535→            </div>
+   536→          </div>
+   537→          <DialogFooter className="gap-2">
+   538→            <Button variant="outline" onClick={() => setCreateOpen(false)} className="min-h-11">انصراف</Button>
+   539→            <Button onClick={submitCreate} disabled={saving} className="min-h-11">
+   540→              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+   541→              ثبت تأمین‌کننده
+   542→            </Button>
+   543→          </DialogFooter>
+   544→        </DialogContent>
+   545→      </Dialog>
+   546→    </div>
+   547→  )
+   548→}
+   549→
+   550→// ---------- product card with quick-order popover ----------
+   551→function ProviderProductCard({
+   552→  product,
+   553→  companyName,
+   554→  onQuickOrder,
+   555→}: {
+   556→  product: CompanyProduct
+   557→  companyName: string
+   558→  onQuickOrder: (qty: number) => void
+   559→}) {
+   560→  const [qty, setQty] = React.useState(1)
+   561→  const [open, setOpen] = React.useState(false)
+   562→
+   563→  return (
+   564→    <div className="rounded-2xl border border-border bg-card p-3 flex flex-col">
+   565→      {product.image ? (
+   566→        <img src={product.image} alt={product.name} className="h-24 w-full rounded-xl object-cover border border-border bg-muted" loading="lazy" />
+   567→      ) : (
+   568→        <div
+   569→          className="h-24 w-full rounded-xl flex items-center justify-center text-3xl font-black text-white/90"
+   570→          style={{ background: `linear-gradient(135deg, ${colorOf(product.name)}, ${colorOf(product.name)}c0)` }}
+   571→          aria-hidden
+   572→        >
+   573→          {product.name.trim()[0] ?? '؟'}
+   574→        </div>
+   575→      )}
+   576→      <p className="text-sm font-bold mt-2 line-clamp-2 leading-5 min-h-10">{product.name}</p>
+   577→      <p className="text-[10px] text-muted-foreground mt-0.5">{companyName}</p>
+   578→      <div className="mt-1.5 flex items-center justify-between">
+   579→        <span className="text-xs num">{money(product.sellPrice)} <span className="text-muted-foreground">تومان</span></span>
+   580→        <StockIndicator stock={product.stock} minStock={product.minStock} showLabel={false} />
+   581→      </div>
+   582→      <Popover open={open} onOpenChange={(o) => { setOpen(o); if (o) setQty(1) }}>
+   583→        <PopoverTrigger asChild>
+   584→          <Button variant="secondary" size="sm" className="mt-2 min-h-9 w-full">
+   585→            <ShoppingCart className="h-3.5 w-3.5" /> سفارش
+   586→          </Button>
+   587→        </PopoverTrigger>
+   588→        <PopoverContent className="w-60 p-3" align="center">
+   589→          <p className="text-xs font-bold mb-2 line-clamp-1">{product.name}</p>
+   590→          <div className="flex items-center justify-center gap-2 mb-3">
+   591→            <Button variant="outline" size="icon" className="h-9 w-9" aria-label="کاهش تعداد" onClick={() => setQty((q) => Math.max(1, q - 1))}>
+   592→              <Minus className="h-4 w-4" />
+   593→            </Button>
+   594→            <Input
+   595→              className="num h-9 w-16 text-center"
+   596→              inputMode="numeric"
+   597→              value={toFaDigits(qty)}
+   598→              onChange={(e) => {
+   599→                const n = Number(e.target.value.replace(/[^\d]/g, ''))
+   600→                setQty(Number.isFinite(n) && n > 0 ? Math.min(9999, n) : 1)
+   601→              }}
+   602→              aria-label="تعداد"
+   603→            />
+   604→            <Button variant="outline" size="icon" className="h-9 w-9" aria-label="افزایش تعداد" onClick={() => setQty((q) => Math.min(9999, q + 1))}>
+   605→              <Plus className="h-4 w-4" />
+   606→            </Button>
+   607→          </div>
+   608→          <Button
+   609→            className="w-full min-h-11"
+   610→            onClick={() => {
+   611→              onQuickOrder(qty)
+   612→              setOpen(false)
+   613→            }}
+   614→          >
+   615→            <ShoppingCart className="h-4 w-4" /> افزودن به سفارش
+   616→          </Button>
+   617→        </PopoverContent>
+   618→      </Popover>
+   619→    </div>
+   620→  )
+   621→}
+   622→
+   623→// ------------------------------------------------------------------
+   624→// Account statement dialog — accounting-grade ledger with print sheet
+   625→// ------------------------------------------------------------------
+   626→
+   627→const ROW_TYPE_STYLE: Record<StatementRow['type'], { label: string; color: string }> = {
+   628→  ORDER: { label: 'خرید', color: '#B33A3A' },
+   629→  PAYMENT: { label: 'پرداخت', color: '#3E7C59' },
+   630→  CHEQUE: { label: 'چک', color: '#8A6F3C' },
+   631→}
+   632→
+   633→function printStatementSheet(data: StatementDTO) {
+   634→  const s = data.summary
+   635→  const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+   636→  const rowsHtml = data.rows
+   637→    .map(
+   638→      (r) => `<tr>
+   639→        <td class="num">${toFaDigits(formatJalaliFull(new Date(r.date)))}</td>
+   640→        <td>${esc(r.label)}</td>
+   641→        <td class="num">${esc(r.ref)}</td>
+   642→        <td class="num debit">${r.debit ? toFaDigits(money(r.debit)) : '—'}</td>
+   643→        <td class="num credit">${r.credit ? toFaDigits(money(r.credit)) : '—'}</td>
+   644→        <td class="num balance">${toFaDigits(money(r.balance))}</td>
+   645→      </tr>`
+   646→    )
+   647→    .join('')
+   648→  const html = `<!doctype html><html dir="rtl" lang="fa"><head><meta charset="utf-8">
+   649→  <title>صورت‌حساب ${esc(data.provider.name)}</title>
+   650→  <style>
+   651→    * { box-sizing: border-box; }
+   652→    body { font-family: Tahoma, 'Iranian Sans', sans-serif; padding: 32px 40px; color: #1c241f; }
+   653→    .brand { text-align: center; border-bottom: 3px double #C9A227; padding-bottom: 14px; margin-bottom: 6px; }
+   654→    .brand h1 { font-size: 22px; margin: 0 0 4px; }
+   655→    .brand .sub { color: #8A6F3C; font-size: 12px; letter-spacing: 2px; }
+   656→    h2 { text-align: center; font-size: 16px; margin: 18px 0 4px; }
+   657→    .meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 18px; font-size: 12px; margin: 14px 0; }
+   658→    .meta b { color: #8A6F3C; }
+   659→    table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 10px; }
+   660→    th { background: #3E7C59; color: #fff; padding: 7px 6px; font-size: 11px; }
+   661→    td { border: 1px solid #d8ded9; padding: 6px; text-align: center; }
+   662→    tr:nth-child(even) td { background: #f6f8f6; }
+   663→    .debit { color: #B33A3A; } .credit { color: #3E7C59; } .balance { font-weight: bold; color: #8A6F3C; }
+   664→    .summary { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 18px; font-size: 12.5px; }
+   665→    .sumbox { border: 1px solid #C9A22766; border-radius: 10px; padding: 10px 14px; display: flex; justify-content: space-between; }
+   666→    .sumbox.total { background: #3E7C5912; border-color: #3E7C59; font-weight: bold; }
+   667→    .sigs { display: flex; justify-content: space-between; margin-top: 52px; font-size: 12px; }
+   668→    .sigs span { border-top: 1px solid #999; padding-top: 6px; width: 26%; text-align: center; }
+   669→    .foot { text-align: center; color: #999; font-size: 10px; margin-top: 26px; border-top: 1px dashed #C9A22788; padding-top: 8px; }
+   670→  </style></head><body>
+   671→    <div class="brand"><h1>هایپر زیتون ✦</h1><div class="sub">HYPER ZEYTOON — KERMAN</div></div>
+   672→    <h2>صورت‌حساب تأمین‌کننده — ${esc(data.provider.name)}</h2>
+   673→    <div class="meta">
+   674→      <div><b>تلفن:</b> ${toFaDigits(data.provider.phone ?? '—')}</div>
+   675→      <div><b>تاریخ تهیه:</b> ${toFaDigits(formatJalaliFull(new Date(data.generatedAt)))}</div>
+   676→      <div><b>تهیه‌کننده:</b> ${esc(data.generatedByName)}</div>
+   677→    </div>
+   678→    <table>
+   679→      <thead><tr><th>تاریخ</th><th>شرح</th><th>سند</th><th>بدهکار (خرید)</th><th>بستانکار (پرداخت)</th><th>مانده</th></tr></thead>
+   680→      <tbody>${rowsHtml || '<tr><td colspan="6">گردشی ثبت نشده است</td></tr>'}</tbody>
+   681→    </table>
+   682→    <div class="summary">
+   683→      <div class="sumbox"><span>جمع خریدها</span><b class="num">${toFaDigits(money(s.purchases))} تومان</b></div>
+   684→      <div class="sumbox"><span>پرداخت‌های نقدی/کارت‌به‌کارت</span><b class="num">${toFaDigits(money(s.paidOther))} تومان</b></div>
+   685→      <div class="sumbox"><span>چک‌های تحویل‌شده</span><b class="num">${toFaDigits(money(s.settledCheques))} تومان</b></div>
+   686→      <div class="sumbox total"><span>مانده بدهی ما به تأمین‌کننده</span><b class="num">${toFaDigits(money(s.balance))} تومان</b></div>
+   687→      <div class="sumbox"><span>چک‌های در جریان</span><b class="num">${toFaDigits(s.openChequeCount)} فقره — ${toFaDigits(money(s.openChequeAmount))} تومان</b></div>
+   688→      <div class="sumbox"><span>تعداد سفارش‌های تسویه‌شده</span><b class="num">${toFaDigits(s.ordersCount)}</b></div>
+   689→    </div>
+   690→    <div class="sigs"><span>حسابدار</span><span>خزانه‌دار</span><span>مدیریت</span></div>
+   691→    <div class="foot">این صورت‌حساب توسط پلتفرم داخلی هایپر زیتون تولید شده است — ✦</div>
+   692→    <script>window.onload = function () { window.print() }</script>
+   693→  </body></html>`
+   694→  const w = window.open('', '_blank', 'width=900,height=1000')
+   695→  if (!w) return false
+   696→  w.document.write(html)
+   697→  w.document.close()
+   698→  return true
+   699→}
+   700→
+   701→function StatementDialog({
+   702→  open,
+   703→  onOpenChange,
+   704→  data,
+   705→  loading,
+   706→  onExport,
+   707→  exporting,
+   708→}: {
+   709→  open: boolean
+   710→  onOpenChange: (v: boolean) => void
+   711→  data: StatementDTO | null
+   712→  loading: boolean
+   713→  onExport: () => void
+   714→  exporting: boolean
+   715→}) {
+   716→  const { toast } = useToast()
+   717→
+   718→  const doPrint = () => {
+   719→    if (!data) return
+   720→    const okWin = printStatementSheet(data)
+   721→    if (!okWin) toast({ title: 'اجازه باز شدن پنجره چاپ داده نشد', description: 'مسدودکننده پاپ‌آپ را خاموش کنید', variant: 'destructive' })
+   722→  }
+   723→
+   724→  const s = data?.summary
+   725→  return (
+   726→    <Dialog open={open} onOpenChange={onOpenChange}>
+   727→      <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-3xl max-h-[92vh] overflow-y-auto" dir="rtl">
+   728→        <DialogHeader className="text-center items-center">
+   729→          <DialogTitle className="flex items-center justify-center gap-2">
+   730→            <Landmark className="h-5 w-5 text-[#C9A227]" />
+   731→            صورت‌حساب {data?.provider.name ?? 'تأمین‌کننده'}
+   732→          </DialogTitle>
+   733→          <DialogDescription>
+   734→            گردش خریدها، پرداخت‌ها و چک‌ها با مانده لحظه‌ای — معیار رسمی تسویه با تأمین‌کننده
+   735→          </DialogDescription>
+   736→          <OrnateDivider />
+   737→        </DialogHeader>
+   738→
+   739→        {loading ? (
+   740→          <div className="py-14 flex justify-center"><Loader2 className="h-7 w-7 animate-spin text-primary" /></div>
+   741→        ) : data && s ? (
+   742→          <div className="space-y-4">
+   743→            {/* summary cards */}
+   744→            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+   745→              <SumCard icon={<ReceiptText className="h-4 w-4" />} label="جمع خریدها" value={`${toFaDigits(money(s.purchases))}`} unit="تومان" color="#B33A3A" />
+   746→              <SumCard icon={<ShoppingCart className="h-4 w-4" />} label="پرداخت نقدی/کارت" value={`${toFaDigits(money(s.paidOther))}`} unit="تومان" color="#3E7C59" />
+   747→              <SumCard icon={<Landmark className="h-4 w-4" />} label="چک‌های تحویل‌شده" value={`${toFaDigits(money(s.settledCheques))}`} unit="تومان" color="#8A6F3C" />
+   748→              <SumCard
+   749→                icon={<TrendingUp className="h-4 w-4" />}
+   750→                label="مانده بدهی"
+   751→                value={`${toFaDigits(money(s.balance))}`}
+   752→                unit="تومان"
+   753→                color={s.balance > 0 ? '#B33A3A' : '#3E7C59'}
+   754→                highlight
+   755→              />
+   756→            </div>
+   757→            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+   758→              <span className="rounded-full bg-accent px-2.5 py-1">سفارش‌های تسویه‌شده: <b className="num">{toFaDigits(s.ordersCount)}</b></span>
+   759→              <span className="rounded-full bg-accent px-2.5 py-1">چک‌های در جریان: <b className="num">{toFaDigits(s.openChequeCount)}</b> فقره — <b className="num">{toFaDigits(money(s.openChequeAmount))}</b> تومان</span>
+   760→              {s.lastActivityAt && <span className="rounded-full bg-accent px-2.5 py-1">آخرین گردش: <b className="num">{toFaDigits(formatJalaliFull(new Date(s.lastActivityAt)))}</b></span>}
+   761→            </div>
+   762→
+   763→            {/* ledger table */}
+   764→            <div className="rounded-xl border border-border overflow-hidden">
+   765→              <div className="max-h-[42vh] overflow-y-auto">
+   766→                <table className="w-full text-xs">
+   767→                  <thead className="sticky top-0 bg-primary text-primary-foreground z-10">
+   768→                    <tr>
+   769→                      <th className="py-2 px-2 font-medium">تاریخ</th>
+   770→                      <th className="py-2 px-2 font-medium text-right">شرح</th>
+   771→                      <th className="py-2 px-2 font-medium">سند</th>
+   772→                      <th className="py-2 px-2 font-medium">بدهکار</th>
+   773→                      <th className="py-2 px-2 font-medium">بستانکار</th>
+   774→                      <th className="py-2 px-2 font-medium">مانده</th>
+   775→                    </tr>
+   776→                  </thead>
+   777→                  <tbody>
+   778→                    {data.rows.length === 0 && (
+   779→                      <tr><td colSpan={6} className="text-center py-8 text-muted-foreground">گردشی برای این تأمین‌کننده ثبت نشده است</td></tr>
+   780→                    )}
+   781→                    {data.rows.map((r, i) => {
+   782→                      const st = ROW_TYPE_STYLE[r.type]
+   783→                      return (
+   784→                        <tr key={r.id} className={`border-b border-border/60 ${i % 2 ? 'bg-accent/20' : ''} hover:bg-accent/40 transition-colors`}>
+   785→                          <td className="py-2 px-2 text-center num whitespace-nowrap">{toFaDigits(formatJalaliFull(new Date(r.date)))}</td>
+   786→                          <td className="py-2 px-2">
+   787→                            <span className="inline-flex items-center gap-1.5">
+   788→                              <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: st.color }} />
+   789→                              {r.label}
+   790→                            </span>
+   791→                          </td>
+   792→                          <td className="py-2 px-2 text-center num" dir="ltr">{r.ref}</td>
+   793→                          <td className="py-2 px-2 text-center num text-[#B33A3A]">{r.debit ? toFaDigits(money(r.debit)) : '—'}</td>
+   794→                          <td className="py-2 px-2 text-center num text-[#3E7C59]">{r.credit ? toFaDigits(money(r.credit)) : '—'}</td>
+   795→                          <td className="py-2 px-2 text-center num font-bold text-[#8A6F3C]">{toFaDigits(money(r.balance))}</td>
+   796→                        </tr>
+   797→                      )
+   798→                    })}
+   799→                  </tbody>
+   800→                </table>
+   801→              </div>
+   802→            </div>
+   803→          </div>
+   804→        ) : null}
+   805→
+   806→        <DialogFooter className="gap-2 sm:justify-between">
+   807→          <Button variant="outline" onClick={() => onOpenChange(false)} className="min-h-11">بستن</Button>
+   808→          <div className="flex gap-2">
+   809→            <Button variant="outline" onClick={onExport} disabled={!data || exporting} className="min-h-11 gap-1.5">
+   810→              {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />} اکسل
+   811→            </Button>
+   812→            <Button onClick={doPrint} disabled={!data} className="min-h-11 gap-1.5">
+   813→              <Printer className="h-4 w-4" /> چاپ صورت‌حساب
+   814→            </Button>
+   815→          </div>
+   816→        </DialogFooter>
+   817→      </DialogContent>
+   818→    </Dialog>
+   819→  )
+   820→}
+   821→
+   822→function SumCard({
+   823→  icon,
+   824→  label,
+   825→  value,
+   826→  unit,
+   827→  color,
+   828→  highlight = false,
+   829→}: {
+   830→  icon: React.ReactNode
+   831→  label: string
+   832→  value: string
+   833→  unit: string
+   834→  color: string
+   835→  highlight?: boolean
+   836→}) {
+   837→  return (
+   838→    <div
+   839→      className={`rounded-xl border p-3 ${highlight ? 'shadow-[0_0_0_1px_rgba(201,162,39,0.35)]' : ''}`}
+   840→      style={{ borderColor: `${color}44`, backgroundColor: `${color}0d` }}
+   841→    >
+   842→      <p className="text-[11px] text-muted-foreground flex items-center gap-1.5" style={{ color }}>
+   843→        {icon} {label}
+   844→      </p>
+   845→      <p className="num font-extrabold text-sm mt-1 leading-none" style={{ color }}>
+   846→        {value} <span className="text-[10px] font-normal text-muted-foreground">{unit}</span>
+   847→      </p>
+   848→    </div>
+   849→  )
+   850→}
+   851→

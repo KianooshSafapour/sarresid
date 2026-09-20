@@ -1,0 +1,29 @@
+0000000000000000000000000000000000000000 80b7e1b62f9fcf84cf6c781915fec8bbbebefe50 Z User <z@container> 1789068480 +0000	commit (initial): Initial commit
+80b7e1b62f9fcf84cf6c781915fec8bbbebefe50 b6f418909b9ec8ed426a7106a0c10ad4d8e3e03e Z User <z@container> 1789076397 +0000	commit: e36cef7d-8946-463d-80ed-273227a45b20
+b6f418909b9ec8ed426a7106a0c10ad4d8e3e03e 0e9c93e704d3ceba93f96dd567e67cdf26e83460 Z User <z@container> 1789077319 +0000	commit: a65c8908-ff3a-4ff2-b4f0-9a932bcde67a
+0e9c93e704d3ceba93f96dd567e67cdf26e83460 eba763c6bef7af95c3fae79dc472d491abe354ef Z User <z@container> 1789078733 +0000	commit: 1ed1e303-9b17-4271-a93c-6833cc38be4d
+eba763c6bef7af95c3fae79dc472d491abe354ef fb4d1e297588163361d3e637b825641c5db9ee86 Z User <z@container> 1789079281 +0000	commit: 681f60a5-2c15-46df-8bb5-dcd637f33116
+fb4d1e297588163361d3e637b825641c5db9ee86 687c6321ecd1b9ffeddd6793a56d392bde965757 Z User <z@container> 1789080367 +0000	commit: 74e93549-ef20-4b8e-951a-5f5597746a07
+687c6321ecd1b9ffeddd6793a56d392bde965757 210e2f343912c4f6bda3dd81cb7e853711813f75 Z User <z@container> 1789081358 +0000	commit: 3ac8ea1e-e16a-41e3-ae46-fd3957b1ff3d
+210e2f343912c4f6bda3dd81cb7e853711813f75 f48a1e2d622ba504f2a73c56ace9c4e94c88f7cd Z User <z@container> 1789083234 +0000	commit: 0d9a1940-2830-4283-b2fd-ddd221176cfc
+f48a1e2d622ba504f2a73c56ace9c4e94c88f7cd 66d70c6c4bce3180b346b6a88d5af5b0ea940935 Z User <z@container> 1789084066 +0000	commit: cef7c9a6-2aec-4af8-a1b6-5ec6f3723949
+66d70c6c4bce3180b346b6a88d5af5b0ea940935 0cc0a3e2cf3628c232ec859a1c14fd54c133b2db Z User <z@container> 1789085488 +0000	commit: c84b64fd-b044-494c-8510-d7a04853a011
+0cc0a3e2cf3628c232ec859a1c14fd54c133b2db b6b6cc39b02bde22a06c88639c75d5176fe8409a Z User <z@container> 1789086124 +0000	commit: 8c1b25e6-d2a9-4d6a-beb2-90ea23e6e25c
+b6b6cc39b02bde22a06c88639c75d5176fe8409a 623659fd6f979fbda6339b427f1a8258db859472 Z User <z@container> 1789086614 +0000	commit: b61c4ce9-47bd-46d5-916d-64f9f3f21c35
+623659fd6f979fbda6339b427f1a8258db859472 050c59545a877318f1e4fcc9a7b626a51d7fd988 Z User <z@container> 1789100128 +0000	commit (amend): b61c4ce9-47bd-46d5-916d-64f9f3f21c35
+050c59545a877318f1e4fcc9a7b626a51d7fd988 dd7ee4ba38234799b20fcce08d8d00417e762f21 Z User <z@container> 1789116615 +0000	commit (amend): b61c4ce9-47bd-46d5-916d-64f9f3f21c35
+dd7ee4ba38234799b20fcce08d8d00417e762f21 b2fb92840b332cd45fc8739761d83115fa269f6e Z User <z@container> 1789147960 +0000	commit (amend): b61c4ce9-47bd-46d5-916d-64f9f3f21c35
+b2fb92840b332cd45fc8739761d83115fa269f6e 0dae20b5ca279e5b7130613b4e31f8b4cf87d3b6 Hyper Zeytoon Platform <platform@hyperzeytoon.local> 1789155594 +0000	commit: v0.1 alpha 'Hello, World' — stable baseline + mobile session fix
+0dae20b5ca279e5b7130613b4e31f8b4cf87d3b6 84a0f9982f3f7687aed1bf462302365daa5232e7 Hyper Zeytoon Platform <platform@hyperzeytoon.local> 1789157652 +0000	commit: v0.2: mobile session fix (token fallback), formal Persian honorifics, demo company simulator (3 scenarios), scientific reorder engine (forecast+safety stock), shrinkage report
+84a0f9982f3f7687aed1bf462302365daa5232e7 5aebeb5d04650024e926a233b914a3b845ed64f0 Z User <z@container> 1789157708 +0000	commit: efaf9587-c547-4d01-bcbc-2f261411d51c
+5aebeb5d04650024e926a233b914a3b845ed64f0 b625eb08a0c2f2e2192a011c3644f2dc22bc7e5a Z User <z@container> 1789218432 +0000	commit (amend): efaf9587-c547-4d01-bcbc-2f261411d51c
+b625eb08a0c2f2e2192a011c3644f2dc22bc7e5a 46befc3e91ddcadbeab068097c35a0badefc5045 Z User <z@container> 1789296805 +0000	commit (amend): efaf9587-c547-4d01-bcbc-2f261411d51c
+46befc3e91ddcadbeab068097c35a0badefc5045 7a961f485bd65a4940d159fab3fe7cb184316427 Z User <z@container> 1789308585 +0000	commit (amend): efaf9587-c547-4d01-bcbc-2f261411d51c
+7a961f485bd65a4940d159fab3fe7cb184316427 d49819269d9801af2bd05dbf6248cc515c2c003c Z User <z@container> 1789328599 +0000	commit (amend): efaf9587-c547-4d01-bcbc-2f261411d51c
+d49819269d9801af2bd05dbf6248cc515c2c003c b568d3af0b7e06e8dce43e138c29cde4730eea08 Z User <z@container> 1789448109 +0000	commit (amend): efaf9587-c547-4d01-bcbc-2f261411d51c
+b568d3af0b7e06e8dce43e138c29cde4730eea08 998987f1bc30b79f23aed9de096c5538448da405 Z User <z@container> 1789471306 +0000	commit (amend): efaf9587-c547-4d01-bcbc-2f261411d51c
+998987f1bc30b79f23aed9de096c5538448da405 f3247ee231317b6f5481f805ed55a57f4cff545b Z User <z@container> 1789500581 +0000	commit: v0.3: smart cheque planner (timeframe+holiday-flex engine), ISO-15489 hybrid archive + Iran provider map, leave management, personal vault, sandbox mode + guided tour, root-only analytics + root admin, dark theme 'شب کویر' + appearance studio, 4-locale i18n infra, socket.io realtime chat, Holoo Apex + science research docs
+f3247ee231317b6f5481f805ed55a57f4cff545b 91b2c1f342aaee8afd1a13fe6206257d4c3cee08 Z User <z@container> 1789500641 +0000	commit: 8898aa89-54ac-44e1-b83e-5589d4f24b45
+91b2c1f342aaee8afd1a13fe6206257d4c3cee08 6c35fa9346583e45a56b5228013364a79686df07 Z User <z@container> 1789505477 +0000	commit: 58a77eff-b79e-4cc2-9108-99de25f96010
+6c35fa9346583e45a56b5228013364a79686df07 e3c05835a654504800c683f79d6c641416460377 Z User <z@container> 1789564719 +0000	commit (amend): 58a77eff-b79e-4cc2-9108-99de25f96010
+e3c05835a654504800c683f79d6c641416460377 94b926e53169c516c108e5cb97e44a28818ba407 Z User <z@container> 1789922162 +0000	commit (amend): 58a77eff-b79e-4cc2-9108-99de25f96010

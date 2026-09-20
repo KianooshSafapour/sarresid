@@ -1,0 +1,558 @@
+   560→   560→            lowProducts.map((p) => (
+   561→   561→              <Card key={p.id} className="flex flex-wrap items-center gap-3 p-3.5">
+   562→   562→                <ProductImage src={p.imageUrl} name={p.name} size={48} />
+   563→   563→                <div className="min-w-0 flex-1">
+   564→   564→                  <div className="truncate text-sm font-bold text-[#253A2A]" title={p.name}>{p.name}</div>
+   565→   565→                  {p.nameFa && <div className="truncate text-xs text-[#6B7A66]">{p.nameFa}</div>}
+   566→   566→                  <div className="mt-1 flex flex-wrap items-center gap-2">
+   567→   567→                    <StockBadge stock={p.stock} minStock={p.minStock} />
+   568→   568→                    <span className={`text-xs font-bold tabular-nums ${stockDot(p.stock, p.minStock)}`}>
+   569→   569→                      {toFaDigits(Math.floor(p.stock))} از حداقل {toFaDigits(Math.floor(p.minStock))}
+   570→   570→                    </span>
+   571→   571→                  </div>
+   572→   572→                </div>
+   573→   573→                <div className="flex items-center gap-2">
+   574→   574→                  <input
+   575→   575→                    type="number"
+   576→   576→                    min={1}
+   577→   577→                    value={qtyReq[p.id] ?? ''}
+   578→   578→                    onChange={(e) => setQtyReq((m) => ({ ...m, [p.id]: e.target.value }))}
+   579→   579→                    className={`${inputCls} w-20 min-h-[44px] px-2 text-center tabular-nums`}
+   580→   580→                    aria-label={`تعداد درخواست برای ${p.name}`}
+   581→   581→                    title="تعداد درخواست"
+   582→   582→                  />
+   583→   583→                  <GhostButton onClick={() => void quickRequest(p)} disabled={lowBusy === p.id} className="min-h-[44px] shrink-0">
+   584→   584→                    {lowBusy === p.id ? <Spinner /> : <PackagePlus className="h-4 w-4" />} درخواست از انبار
+   585→   585→                  </GhostButton>
+   586→   586→                </div>
+   587→   587→              </Card>
+   588→   588→            ))
+   589→   589→          )}
+   590→   590→        </div>
+   591→   591→      )}
+   592→   592→
+   593→   593→      {!loading && tab === 'shrinkage' && canReportShrink && (
+   594→   594→        <div className="space-y-3">
+   595→   595→          {shLoading && !shData ? <ShrinkageSkeleton /> : null}
+   596→   596→
+   597→   597→          {!shLoading && shForbidden && (
+   598→   598→            <Card className="flex items-start gap-3 border-[#EAD9A8] bg-gradient-to-l from-[#FBF6E8] to-[#FDFBF3] p-4">
+   599→   599→              <Info className="mt-0.5 h-5 w-5 shrink-0 text-[#8A6508]" />
+   600→   600→              <p className="text-sm leading-6 text-[#6B5B2A]">
+   601→   601→                ثبت نزولی برای شما مجاز است، اما مشاهدهٔ فهرست و آمار دفتر نزولات برای نقش شما باز نیست.
+   602→   602→              </p>
+   603→   603→            </Card>
+   604→   604→          )}
+   605→   605→
+   606→   606→          {shData && !shForbidden && (
+   607→   607→            <Card className="p-4">
+   608→   608→              {/* summary strip */}
+   609→   609→              <div className="flex flex-wrap items-center justify-between gap-3">
+   610→   610→                <div className="min-w-0">
+   611→   611→                  <div className="text-[11px] font-semibold uppercase tracking-wide text-[#8A9884]">
+   612→   612→                    ارزش نزولات {toFaDigits(shData.days)} روز اخیر | Shrinkage value
+   613→   613→                  </div>
+   614→   614→                  <div className="mt-0.5 text-xl font-bold tabular-nums text-[#253A2A]">{faMoney(shData.summary.totalValue)}</div>
+   615→   615→                </div>
+   616→   616→                <div className="flex flex-wrap items-center gap-2">
+   617→   617→                  <Badge className="border-[#E4DCC8] bg-white text-[#4A5A44]">
+   618→   618→                    تعداد موارد: <b className="text-sm">{toFaDigits(shData.summary.count)}</b>
+   619→   619→                  </Badge>
+   620→   620→                  {shData.summary.ratioPct != null ? (
+   621→   621→                    <span title="نسبت نزولات به فروش همین بازه — معیار علمی سوپرمارکت ۱ تا ۳ درصد فروش است (ECR Loss)">
+   622→   622→                      <Badge
+   623→   623→                        className={
+   624→   624→                          shData.summary.ratioPct > 2
+   625→   625→                            ? 'border-[#EAD9A8] bg-[#FBF6E8] text-[#8A6508]'
+   626→   626→                            : 'border-[#C8D8C0] bg-[#F3F7EF] text-[#3E6B4A]'
+   627→   627→                        }
+   628→   628→                      >
+   629→   629→                        {shData.summary.ratioPct > 2 ? 'بالای معیار علمی' : 'در محدوده سالم'} — {toFaDigits(shData.summary.ratioPct)}٪
+   630→   630→                      </Badge>
+   631→   631→                    </span>
+   632→   632→                  ) : (
+   633→   633→                    <span title="در این بازه فروش ثبت‌شده‌ای نیست — محاسبه نسبت ممکن نیست">
+   634→   634→                      <Badge className="border-stone-200 bg-stone-100 text-stone-600">نسبت به فروش: —</Badge>
+   635→   635→                    </span>
+   636→   636→                  )}
+   637→   637→                </div>
+   638→   638→                <div className="flex gap-1.5" role="group" aria-label="بازه زمانی دفتر نزولات">
+   639→   639→                  {[7, 30, 90].map((d) => (
+   640→   640→                    <button
+   641→   641→                      key={d}
+   642→   642→                      type="button"
+   643→   643→                      onClick={() => { setShDays(d); void loadShrinkage(d) }}
+   644→   644→                      aria-pressed={shDays === d}
+   645→   645→                      className={cn(
+   646→   646→                        'min-h-[44px] rounded-xl border px-3 text-xs font-semibold transition',
+   647→   647→                        shDays === d
+   648→   648→                          ? 'border-[#B8860B] bg-[#FBF6E8] text-[#8A6508] shadow-sm'
+   649→   649→                          : 'border-[#D8D2BC] bg-white text-[#6B7A66] hover:bg-[#F3F7EF]'
+   650→   650→                      )}
+   651→   651→                    >
+   652→   652→                      {toFaDigits(d)} روز
+   653→   653→                    </button>
+   654→   654→                  ))}
+   655→   655→                </div>
+   656→   656→              </div>
+   657→   657→
+   658→   658→              {/* byReason mini-bar + legend (proportional pure divs) */}
+   659→   659→              {shData.summary.count > 0 && (() => {
+   660→   660→                const parts = SHRINK_REASONS.map((r) => ({ ...r, value: shData.summary.byReason[r.key] ?? 0 }))
+   661→   661→                const tot = parts.reduce((a, x) => a + x.value, 0)
+   662→   662→                return (
+   663→   663→                  <div className="mt-4 border-t border-[#EFEAD8] pt-3">
+   664→   664→                    <div
+   665→   665→                      className="flex h-2.5 overflow-hidden rounded-full bg-[#F1EDE0]"
+   666→   666→                      role="img"
+   667→   667→                      aria-label="سهم علت‌های نزول از ارزش کل"
+   668→   668→                    >
+   669→   669→                      {tot > 0 && parts.filter((x) => x.value > 0).map((x) => (
+   670→   670→                        <div
+   671→   671→                          key={x.key}
+   672→   672→                          style={{ width: `${(x.value / tot) * 100}%`, backgroundColor: x.dot }}
+   673→   673→                          title={`${x.fa}: ${faMoney(x.value)}`}
+   674→   674→                        />
+   675→   675→                      ))}
+   676→   676→                    </div>
+   677→   677→                    <div className="mt-2 flex flex-wrap gap-1.5">
+   678→   678→                      {parts.map((x) => (
+   679→   679→                        <Badge key={x.key} className={x.value > 0 ? x.chip : 'border-stone-200 bg-white text-stone-400'}>
+   680→   680→                          <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: x.dot }} />
+   681→   681→                          {x.fa}: {faMoney(x.value)}
+   682→   682→                        </Badge>
+   683→   683→                      ))}
+   684→   684→                    </div>
+   685→   685→                  </div>
+   686→   686→                )
+   687→   687→              })()}
+   688→   688→            </Card>
+   689→   689→          )}
+   690→   690→
+   691→   691→          {/* report form (collapsible) */}
+   692→   692→          <div className="flex justify-end">
+   693→   693→            <GoldButton
+   694→   694→              onClick={() => setShFormOpen((v) => !v)}
+   695→   695→              aria-expanded={shFormOpen}
+   696→   696→              aria-controls="shrink-form"
+   697→   697→              className="min-h-[44px]"
+   698→   698→            >
+   699→   699→              {shFormOpen ? <ChevronUp className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+   700→   700→              ثبت نزولی جدید
+   701→   701→            </GoldButton>
+   702→   702→          </div>
+   703→   703→
+   704→   704→          {shFormOpen && (
+   705→   705→            <Card className="p-4" id="shrink-form">
+   706→   706→              <div className="space-y-3">
+   707→   707→                <Field label="کالا" required hint="جستجو با نام انگلیسی، فارسی یا بارکد">
+   708→   708→                  {shPicked ? (
+   709→   709→                    <div className="flex items-center justify-between gap-2 rounded-xl border border-[#5F8F55] bg-[#F3F7EF] px-3 py-2.5 text-sm">
+   710→   710→                      <span className="min-w-0 truncate font-semibold text-[#3E6B4A]">
+   711→   711→                        {shPicked.name}{shPicked.nameFa ? ` — ${shPicked.nameFa}` : ''}
+   712→   712→                      </span>
+   713→   713→                      <button type="button" onClick={() => setShPicked(null)} className="rounded-full p-1 text-[#6B7A66] hover:bg-white" aria-label="حذف انتخاب">
+   714→   714→                        <X className="h-4 w-4" />
+   715→   715→                      </button>
+   716→   716→                    </div>
+   717→   717→                  ) : (
+   718→   718→                    <>
+   719→   719→                      <div className="relative">
+   720→   720→                        <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#A8A28C]" />
+   721→   721→                        <input
+   722→   722→                          value={shProdQ}
+   723→   723→                          onChange={(e) => setShProdQ(e.target.value)}
+   724→   724→                          className={`${inputCls} min-h-[44px] pr-9`}
+   725→   725→                          placeholder="جستجوی کالا…"
+   726→   726→                          aria-label="جستجوی کالا برای ثبت نزولی"
+   727→   727→                        />
+   728→   728→                      </div>
+   729→   729→                      {shProdQ.trim() !== '' && (
+   730→   730→                        <div className="mt-2 max-h-44 divide-y divide-[#EFEAD8] overflow-y-auto rounded-xl border border-[#E4DCC8] bg-white pz-scroll">
+   731→   731→                          {filteredSh.length === 0 && <div className="p-3 text-xs text-[#8A9884]">کالایی پیدا نشد</div>}
+   732→   732→                          {filteredSh.map((p) => (
+   733→   733→                            <button
+   734→   734→                              key={p.id}
+   735→   735→                              type="button"
+   736→   736→                              onClick={() => { setShPicked(p); setShProdQ('') }}
+   737→   737→                              className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-right text-sm transition hover:bg-[#F3F7EF]"
+   738→   738→                            >
+   739→   739→                              <span className="min-w-0 truncate font-medium text-[#33402F]">{p.name}</span>
+   740→   740→                              <span className={`shrink-0 text-xs tabular-nums ${stockDot(p.stock, p.minStock)}`}>موجودی {toFaDigits(Math.floor(p.stock))}</span>
+   741→   741→                            </button>
+   742→   742→                          ))}
+   743→   743→                        </div>
+   744→   744→                      )}
+   745→   745→                    </>
+   746→   746→                  )}
+   747→   747→                </Field>
+   748→   748→                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+   749→   749→                  <Field label="تعداد" required>
+   750→   750→                    <input type="number" min={0.5} step="any" value={shQty} onChange={(e) => setShQty(e.target.value)} className={`${inputCls} min-h-[44px]`} dir="ltr" />
+   751→   751→                  </Field>
+   752→   752→                  <Field label="قیمت واحد (تومان)" hint="خالی بماند تا از قیمت خرید کالا پر شود">
+   753→   753→                    <input
+   754→   754→                      type="number" min={0} step="any" value={shCost} onChange={(e) => setShCost(e.target.value)}
+   755→   755→                      className={`${inputCls} min-h-[44px]`} dir="ltr" placeholder={shPicked ? String(shPicked.buyPrice) : 'پیش‌فرض'}
+   756→   756→                    />
+   757→   757→                  </Field>
+   758→   758→                </div>
+   759→   759→                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+   760→   760→                  <Field label="علت نزول" required>
+   761→   761→                    <select value={shReason} onChange={(e) => setShReason(e.target.value as ShrinkReason)} className={`${inputCls} min-h-[44px]`} aria-label="علت نزول">
+   762→   762→                      {SHRINK_REASONS.map((r) => (
+   763→   763→                        <option key={r.key} value={r.key}>{r.fa}</option>
+   764→   764→                      ))}
+   765→   765→                    </select>
+   766→   766→                  </Field>
+   767→   767→                  <Field label="یادداشت">
+   768→   768→                    <input value={shNote} onChange={(e) => setShNote(e.target.value)} className={`${inputCls} min-h-[44px]`} placeholder="مثلاً آسیب در حمل، انقضای زنجیره سرد…" />
+   769→   769→                  </Field>
+   770→   770→                </div>
+   771→   771→                <div className="flex justify-end gap-2 border-t border-[#EFEAD8] pt-3">
+   772→   772→                  <GhostButton onClick={() => setShFormOpen(false)} className="min-h-[44px]">انصراف</GhostButton>
+   773→   773→                  <PrimaryButton onClick={() => void submitShrink()} disabled={shSaving} className="min-h-[44px]">
+   774→   774→                    {shSaving ? <Spinner /> : <TrendingDown className="h-4 w-4" />} ثبت نزولی
+   775→   775→                  </PrimaryButton>
+   776→   776→                </div>
+   777→   777→              </div>
+   778→   778→            </Card>
+   779→   779→          )}
+   780→   780→
+   781→   781→          {/* recent list — latest 10 */}
+   782→   782→          {shData && !shForbidden && (
+   783→   783→            shData.rows.length === 0 ? (
+   784→   784→              <EmptyState
+   785→   785→                icon={<span className="text-4xl">🌱</span>}
+   786→   786→                title="هنوز نزولی ثبت نشده — عالی!"
+   787→   787→                hint="وقتی کالا فاسد، منقضی، آسیب‌دیده یا مفقود می‌شود، از دکمهٔ «ثبت نزولی جدید» همین‌جا ثبتش کنید."
+   788→   788→              />
+   789→   789→            ) : (
+   790→   790→              <div className="max-h-96 space-y-2 overflow-y-auto pz-scroll pl-1">
+   791→   791→                {shData.rows.slice(0, 10).map((r) => {
+   792→   792→                  const meta = REASON_MAP[r.reason]
+   793→   793→                  const unit = r.productId ? unitById.get(r.productId) : undefined
+   794→   794→                  return (
+   795→   795→                    <Card key={r.id} className="p-3.5">
+   796→   796→                      <div className="flex flex-wrap items-start justify-between gap-2">
+   797→   797→                        <div className="min-w-0">
+   798→   798→                          <div className="truncate text-sm font-bold text-[#253A2A]" title={r.name}>{r.name}</div>
+   799→   799→                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[#6B7A66]">
+   800→   800→                            <Badge className={meta?.chip ?? 'border-stone-200 bg-stone-100 text-stone-600'}>{meta?.fa ?? r.reason}</Badge>
+   801→   801→                            <span className="tabular-nums">{toFaDigits(r.qty)}{unit ? ` ${unit}` : ''}</span>
+   802→   802→                            {r.note && <span className="truncate">— {r.note}</span>}
+   803→   803→                          </div>
+   804→   804→                        </div>
+   805→   805→                        <div className="text-left">
+   806→   806→                          <div className="text-sm font-bold tabular-nums text-[#8A6508]">{faMoney(r.qty * r.unitCost)}</div>
+   807→   807→                          <div className="mt-1 flex items-center justify-end gap-2">
+   808→   808→                            <Avatar name={r.reporter?.name ?? '؟'} color={colorFor(r.reportedById)} size={22} />
+   809→   809→                            <span className="text-xs font-medium text-[#4A5A44]">{r.reporter?.name ?? '—'}</span>
+   810→   810→                            <TimeAgo iso={r.createdAt} />
+   811→   811→                          </div>
+   812→   812→                        </div>
+   813→   813→                      </div>
+   814→   814→                    </Card>
+   815→   815→                  )
+   816→   816→                })}
+   817→   817→              </div>
+   818→   818→            )
+   819→   819→          )}
+   820→   820→        </div>
+   821→   821→      )}
+   822→   822→
+   823→   823→      {!loading && tab === 'insights' && canViewInsights && (
+   824→   824→        <div className="space-y-3">
+   825→   825→          {insLoading && !insData ? <InsightsSkeleton /> : null}
+   826→   826→
+   827→   827→          {!insLoading && insForbidden && (
+   828→   828→            <Card className="flex items-start gap-3 border-rose-200 bg-rose-50/60 p-4">
+   829→   829→              <Info className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
+   830→   830→              <p className="text-sm leading-6 text-rose-700">مشاهدهٔ تحلیل هوشمند انبار برای نقش شما مجاز نیست.</p>
+   831→   831→            </Card>
+   832→   832→          )}
+   833→   833→
+   834→   834→          {insData && !insForbidden && (
+   835→   835→            <>
+   836→   836→              <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-[#8A9884]">
+   837→   837→                <span>
+   838→   838→                  تولید شده: {fmtJalaliTime(insData.generatedAt)} · منبع داده: {insData.demandSource === 'SALES' ? 'ثبت فروش' : 'اقلام سفارش‌ها'}
+   839→   839→                </span>
+   840→   840→                <GhostButton onClick={() => void loadInsights()} disabled={insLoading} className="min-h-[44px]">
+   841→   841→                  {insLoading ? <Spinner /> : <RefreshCw className="h-4 w-4" />} بروزرسانی
+   842→   842→                </GhostButton>
+   843→   843→              </div>
+   844→   844→
+   845→   845→              {/* ABC classification */}
+   846→   846→              <Card className="p-4">
+   847→   847→                <div className="flex items-center gap-2">
+   848→   848→                  <BarChart3 className="h-5 w-5 shrink-0 text-[#3E6B4A]" />
+   849→   849→                  <div className="min-w-0">
+   850→   850→                    <div className="text-sm font-bold text-[#253A2A]">
+   851→   851→                      طبقه‌بندی ABC <span className="text-xs font-normal text-[#8A9884]">| ABC classification</span>
+   852→   852→                    </div>
+   853→   853→                    <div className="text-xs text-[#6B7A66]">کالاها بر اساس سهم فروش — A تا ۸۰٪، B تا ۹۵٪، C بقیه (پارتو)</div>
+   854→   854→                  </div>
+   855→   855→                </div>
+   856→   856→                {insData.abc.classes.every((c) => c.count === 0) ? (
+   857→   857→                  <p className="mt-3 rounded-xl bg-[#FBF9F3] px-3 py-2 text-xs text-[#8A9884]">هنوز داده فروش کافی برای طبقه‌بندی نیست.</p>
+   858→   858→                ) : (
+   859→   859→                  <>
+   860→   860→                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+   861→   861→                      {insData.abc.classes.map((c) => (
+   862→   862→                        <div
+   863→   863→                          key={c.class}
+   864→   864→                          className={cn(
+   865→   865→                            'rounded-xl border px-3 py-2.5',
+   866→   866→                            c.class === 'A'
+   867→   867→                              ? 'border-[#EAD9A8] bg-gradient-to-l from-[#FBF6E8] to-[#FDF8EC] text-[#8A6508]'
+   868→   868→                              : c.class === 'B'
+   869→   869→                                ? 'border-[#C8D8C0] bg-[#F3F7EF] text-[#3E6B4A]'
+   870→   870→                                : 'border-stone-200 bg-stone-50 text-stone-600'
+   871→   871→                          )}
+   872→   872→                        >
+   873→   873→                          <div className="text-xs font-semibold opacity-80">کلاس {c.class}</div>
+   874→   874→                          <div className="text-lg font-bold tabular-nums">{toFaDigits(c.count)} کالا · {toFaDigits(c.revenueShare)}٪ فروش</div>
+   875→   875→                        </div>
+   876→   876→                      ))}
+   877→   877→                    </div>
+   878→   878→                    {insData.abc.topA.length > 0 && (
+   879→   879→                      <div className="mt-3">
+   880→   880→                        <div className="text-xs font-semibold text-[#4A5A44]">کالاهای کلیدی دسته A:</div>
+   881→   881→                        <ul className="mt-1 space-y-1">
+   882→   882→                          {insData.abc.topA.map((n, i) => (
+   883→   883→                            <li key={n} className="flex items-center gap-2 text-xs text-[#33402F]">
+   884→   884→                              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#FBF6E8] text-[10px] font-bold text-[#8A6508]">{toFaDigits(i + 1)}</span>
+   885→   885→                              <span className="truncate">{n}</span>
+   886→   886→                            </li>
+   887→   887→                          ))}
+   888→   888→                        </ul>
+   889→   889→                      </div>
+   890→   890→                    )}
+   891→   891→                  </>
+   892→   892→                )}
+   893→   893→              </Card>
+   894→   894→
+   895→   895→              {/* reorder suggestions */}
+   896→   896→              <Card className="p-4">
+   897→   897→                <div className="flex flex-wrap items-center justify-between gap-2">
+   898→   898→                  <div className="flex items-center gap-2">
+   899→   899→                    <PackageSearch className="h-5 w-5 shrink-0 text-[#3E6B4A]" />
+   900→   900→                    <div className="min-w-0">
+   901→   901→                      <div className="text-sm font-bold text-[#253A2A]">
+   902→   902→                        پیشنهاد سفارش مجدد <span className="text-xs font-normal text-[#8A9884]">| Reorder suggestions</span>
+   903→   903→                      </div>
+   904→   904→                      <div className="text-xs text-[#6B7A66]">نقطهٔ سفارش = مصرف روزانه × ۳ روز مهلت تأمین + حداقل موجودی</div>
+   905→   905→                    </div>
+   906→   906→                  </div>
+   907→   907→                  {canCreateOrders && insData.reorder.length > 0 && (
+   908→   908→                    <GoldButton onClick={() => setDraftOpen(true)} className="min-h-[44px]">
+   909→   909→                      <Wand2 className="h-4 w-4" /> سفارش پیش‌نویس
+   910→   910→                    </GoldButton>
+   911→   911→                  )}
+   912→   912→                </div>
+   913→   913→                {insData.reorder.length === 0 ? (
+   914→   914→                  <p className="mt-3 rounded-xl bg-[#F3F7EF] px-3 py-2 text-xs text-[#3E6B4A]">موجودی انبار سالم است — فعلاً سفارشی لازم نیست.</p>
+   915→   915→                ) : (
+   916→   916→                  <div className="mt-3 max-h-96 space-y-2 overflow-y-auto pz-scroll pl-1">
+   917→   917→                    {insData.reorder.map((r) => {
+   918→   918→                      const pct = Math.min(100, Math.max(4, Math.round((r.stock / Math.max(1, r.minStock)) * 100)))
+   919→   919→                      return (
+   920→   920→                        <div key={r.productId} className="rounded-xl border border-[#EFEAD8] bg-[#FBF9F3]/60 p-3">
+   921→   921→                          <div className="flex flex-wrap items-start justify-between gap-2">
+   922→   922→                            <div className="min-w-0">
+   923→   923→                              <div className="truncate text-sm font-bold text-[#253A2A]" title={r.name}>{r.name}</div>
+   924→   924→                              <div className="mt-0.5 text-xs tabular-nums text-[#6B7A66]">
+   925→   925→                                موجودی {toFaDigits(r.stock)} از حداقل {toFaDigits(r.minStock)}
+   926→   926→                                {r.supplierName ? ` · ${r.supplierName}` : ''}
+   927→   927→                                {r.avgDailyDemand > 0 ? ` · مصرف روزانه ~${toFaDigits(r.avgDailyDemand)}` : ''}
+   928→   928→                              </div>
+   929→   929→                            </div>
+   930→   930→                            <Badge className="border-[#EAD9A8] bg-[#FBF6E8] text-[#8A6508]">
+   931→   931→                              پیشنهاد سفارش: <b className="text-sm">{toFaDigits(r.suggestQty)}</b>
+   932→   932→                            </Badge>
+   933→   933→                          </div>
+   934→   934→                          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-[#F1EDE0]" aria-hidden>
+   935→   935→                            <div
+   936→   936→                              className={cn('h-full rounded-full', pct < 50 ? 'bg-red-500' : pct < 100 ? 'bg-amber-500' : 'bg-emerald-500')}
+   937→   937→                              style={{ width: `${pct}%` }}
+   938→   938→                            />
+   939→   939→                          </div>
+   940→   940→                        </div>
+   941→   941→                      )
+   942→   942→                    })}
+   943→   943→                  </div>
+   944→   944→                )}
+   945→   945→                {insData.reorder.length > 0 && canCreateOrders && (
+   946→   946→                  <p className="mt-2 text-[11px] text-[#8A9884]">«سفارش پیش‌نویس» از فهرست کمبود موجودی فعلی، پیش‌نویس گروه‌بندی‌شده بر اساس تأمین‌کننده می‌سازد.</p>
+   947→   947→                )}
+   948→   948→              </Card>
+   949→   949→
+   950→   950→              {/* slow movers / markdown candidates */}
+   951→   951→              <Card className="p-4">
+   952→   952→                <div className="flex items-center gap-2">
+   953→   953→                  <Tag className="h-5 w-5 shrink-0 text-[#3E6B4A]" />
+   954→   954→                  <div className="min-w-0">
+   955→   955→                    <div className="text-sm font-bold text-[#253A2A]">
+   956→   956→                      کندگرد و کاندید مارک‌داون <span className="text-xs font-normal text-[#8A9884]">| Slow movers & markdown</span>
+   957→   957→                    </div>
+   958→   958→                    <div className="text-xs text-[#6B7A66]">کالاهایی که ۶۰ روز فروش نداشته‌اند — سرمایهٔ راکد در قفسه</div>
+   959→   959→                  </div>
+   960→   960→                </div>
+   961→   961→                {insData.slow.length === 0 ? (
+   962→   962→                  <p className="mt-3 rounded-xl bg-[#F3F7EF] px-3 py-2 text-xs text-[#3E6B4A]">کالای کندگردی نیست — چرخش موجودی سالم است.</p>
+   963→   963→                ) : (
+   964→   964→                  <div className="mt-3 max-h-96 space-y-2 overflow-y-auto pz-scroll pl-1">
+   965→   965→                    {insData.slow.map((s) => (
+   966→   966→                      <div key={s.productId} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#EFEAD8] bg-[#FBF9F3]/60 p-3">
+   967→   967→                        <div className="min-w-0">
+   968→   968→                          <div className="truncate text-sm font-bold text-[#253A2A]" title={s.name}>{s.name}</div>
+   969→   969→                          <div className="mt-0.5 text-xs tabular-nums text-[#6B7A66]">
+   970→   970→                            موجودی {toFaDigits(s.stock)} · ارزش {faMoney(s.stockValue)} · قیمت فروش {faMoney(s.sellPrice)}
+   971→   971→                          </div>
+   972→   972→                        </div>
+   973→   973→                        <span title="کاندید مارک‌داون (قیمت فروش ویژه)">
+   974→   974→                          <Badge className="border-amber-200 bg-amber-50 text-amber-800">قیمت ویژه بزن</Badge>
+   975→   975→                        </span>
+   976→   976→                      </div>
+   977→   977→                    ))}
+   978→   978→                  </div>
+   979→   979→                )}
+   980→   980→              </Card>
+   981→   981→            </>
+   982→   982→          )}
+   983→   983→        </div>
+   984→   984→      )}
+   985→   985→
+   986→   986→      {/* ---------- new warehouse request modal ---------- */}
+   987→   987→      <Modal open={newOpen} onClose={() => setNewOpen(false)} title="درخواست جدید از انبار">
+   988→   988→        <div className="space-y-3">
+   989→   989→          <Field label="کالا" required>
+   990→   990→            {picked ? (
+   991→   991→              <div className="flex items-center justify-between gap-2 rounded-xl border border-[#5F8F55] bg-[#F3F7EF] px-3 py-2.5 text-sm">
+   992→   992→                <span className="font-semibold text-[#3E6B4A]">{picked.name}{picked.nameFa ? ` — ${picked.nameFa}` : ''}</span>
+   993→   993→                <button type="button" onClick={() => setPicked(null)} className="rounded-full p-1 text-[#6B7A66] hover:bg-white" aria-label="حذف انتخاب">
+   994→   994→                  <X className="h-4 w-4" />
+   995→   995→                </button>
+   996→   996→              </div>
+   997→   997→            ) : (
+   998→   998→              <>
+   999→   999→                <div className="relative">
+  1000→  1000→                  <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#A8A28C]" />
+  1001→  1001→                  <input
+  1002→  1002→                    value={prodQ}
+  1003→  1003→                    onChange={(e) => setProdQ(e.target.value)}
+  1004→  1004→                    className={`${inputCls} min-h-[44px] pr-9`}
+  1005→  1005→                    placeholder="جستجوی کالا…"
+  1006→  1006→                    autoFocus
+  1007→  1007→                  />
+  1008→  1008→                </div>
+  1009→  1009→                <div className="mt-2 max-h-48 divide-y divide-[#EFEAD8] overflow-y-auto rounded-xl border border-[#E4DCC8] bg-white pz-scroll">
+  1010→  1010→                  {filteredPick.length === 0 && <div className="p-3 text-xs text-[#8A9884]">کالایی پیدا نشد</div>}
+  1011→  1011→                  {filteredPick.map((p) => (
+  1012→  1012→                    <button
+  1013→  1013→                      key={p.id}
+  1014→  1014→                      type="button"
+  1015→  1015→                      onClick={() => { setPicked(p); setProdQ('') }}
+  1016→  1016→                      className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-right text-sm transition hover:bg-[#F3F7EF]"
+  1017→  1017→                    >
+  1018→  1018→                      <span className="min-w-0 truncate font-medium text-[#33402F]">{p.name}</span>
+  1019→  1019→                      <span className={`shrink-0 text-xs tabular-nums ${stockDot(p.stock, p.minStock)}`}>موجودی {toFaDigits(Math.floor(p.stock))}</span>
+  1020→  1020→                    </button>
+  1021→  1021→                  ))}
+  1022→  1022→                </div>
+  1023→  1023→              </>
+  1024→  1024→            )}
+  1025→  1025→          </Field>
+  1026→  1026→          <Field label="تعداد" required>
+  1027→  1027→            <input type="number" min={1} value={newQty} onChange={(e) => setNewQty(e.target.value)} className={inputCls} dir="ltr" />
+  1028→  1028→          </Field>
+  1029→  1029→          <Field label="یادداشت">
+  1030→  1030→            <input value={newNote} onChange={(e) => setNewNote(e.target.value)} className={inputCls} placeholder="مثلاً برای قفسه ۳ لبنیات" />
+  1031→  1031→          </Field>
+  1032→  1032→          <div className="flex justify-end gap-2 border-t border-[#EFEAD8] pt-3">
+  1033→  1033→            <GhostButton onClick={() => setNewOpen(false)} className="min-h-[44px]">انصراف</GhostButton>
+  1034→  1034→            <PrimaryButton onClick={() => void submitRequest()} disabled={creating} className="min-h-[44px]">
+  1035→  1035→              {creating ? <Spinner /> : <PackagePlus className="h-4 w-4" />} ثبت درخواست
+  1036→  1036→            </PrimaryButton>
+  1037→  1037→          </div>
+  1038→  1038→        </div>
+  1039→  1039→      </Modal>
+  1040→  1040→
+  1041→  1041→      {/* ---------- low-stock auto-draft modal ---------- */}
+  1042→  1042→      <LowStockDraftModal user={user} open={draftOpen} onClose={() => setDraftOpen(false)} />
+  1043→  1043→
+  1044→  1044→      {/* ---------- new customer ask modal ---------- */}
+  1045→  1045→      <Modal open={askOpen} onClose={() => setAskOpen(false)} title="درخواست مشتری">
+  1046→  1046→        <div className="space-y-3">
+  1047→  1047→          <Field label="نام کالایی که مشتری خواست" required>
+  1048→  1048→            <input value={askName} onChange={(e) => setAskName(e.target.value)} className={inputCls} placeholder="مثلاً شیر بادام‌زمینی" autoFocus />
+  1049→  1049→          </Field>
+  1050→  1050→          <Field label="یادداشت">
+  1051→  1051→            <input value={askNote} onChange={(e) => setAskNote(e.target.value)} className={inputCls} placeholder="مثلاً دو بار پرسیدند؛ برند دلخواه…" />
+  1052→  1052→          </Field>
+  1053→  1053→          <div className="flex justify-end gap-2 border-t border-[#EFEAD8] pt-3">
+  1054→  1054→            <GhostButton onClick={() => setAskOpen(false)} className="min-h-[44px]">انصراف</GhostButton>
+  1055→  1055→            <GoldButton onClick={() => void submitAsk()} disabled={savingAsk} className="min-h-[44px]">
+  1056→  1056→              {savingAsk ? <Spinner /> : <Plus className="h-4 w-4" />} ثبت
+  1057→  1057→            </GoldButton>
+  1058→  1058→          </div>
+  1059→  1059→        </div>
+  1060→  1060→      </Modal>
+  1061→  1061→    </div>
+  1062→  1062→  )
+  1063→  1063→}
+  1064→  1064→
+  1065→  1065→/* ---------- loading skeletons for the 12-b tabs (shimmer via .pz-skeleton) ---------- */
+  1066→  1066→
+  1067→  1067→/** mirrors the shrinkage tab: summary strip card + form card + 3 row cards */
+  1068→  1068→function ShrinkageSkeleton() {
+  1069→  1069→  return (
+  1070→  1070→    <div role="status" aria-label="در حال بارگذاری دفتر نزولات…" className="space-y-3">
+  1071→  1071→      <div className="rounded-2xl border border-[#E4DCC8] bg-white/90 p-4">
+  1072→  1072→        <SkeletonBlock className="h-3 w-44" />
+  1073→  1073→        <SkeletonBlock className="mt-2 h-6 w-48" />
+  1074→  1074→        <div className="mt-3 flex flex-wrap gap-2">
+  1075→  1075→          <SkeletonBlock className="h-6 w-24 rounded-full" />
+  1076→  1076→          <SkeletonBlock className="h-6 w-36 rounded-full" />
+  1077→  1077→        </div>
+  1078→  1078→        <SkeletonBlock className="mt-3 h-2.5 w-full rounded-full" />
+  1079→  1079→      </div>
+  1080→  1080→      <div className="flex justify-end">
+  1081→  1081→        <SkeletonBlock className="h-11 w-40 rounded-xl" />
+  1082→  1082→      </div>
+  1083→  1083→      {[0, 1, 2].map((i) => (
+  1084→  1084→        <div key={i} className="rounded-2xl border border-[#E4DCC8] bg-white/90 p-3.5">
+  1085→  1085→          <div className="flex items-start justify-between gap-2">
+  1086→  1086→            <div className="min-w-0 flex-1">
+  1087→  1087→              <SkeletonBlock className="h-4 w-2/5" />
+  1088→  1088→              <SkeletonBlock className="mt-2 h-3 w-1/3" />
+  1089→  1089→            </div>
+  1090→  1090→            <SkeletonBlock className="h-5 w-20 rounded-full" />
+  1091→  1091→          </div>
+  1092→  1092→        </div>
+  1093→  1093→      ))}
+  1094→  1094→    </div>
+  1095→  1095→  )
+  1096→  1096→}
+  1097→  1097→
+  1098→  1098→/** mirrors the insights tab: 3 panel cards with chip grids + row placeholders */
+  1099→  1099→function InsightsSkeleton() {
+  1100→  1100→  return (
+  1101→  1101→    <div role="status" aria-label="در حال بارگذاری تحلیل هوشمند انبار…" className="space-y-3">
+  1102→  1102→      {[0, 1, 2].map((i) => (
+  1103→  1103→        <div key={i} className="rounded-2xl border border-[#E4DCC8] bg-white/90 p-4">
+  1104→  1104→          <SkeletonBlock className="h-4 w-1/3" />
+  1105→  1105→          <SkeletonBlock className="mt-2 h-3 w-1/2" />
+  1106→  1106→          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+  1107→  1107→            <SkeletonBlock className="h-14 rounded-xl" />
+  1108→  1108→            <SkeletonBlock className="h-14 rounded-xl" />
+  1109→  1109→            <SkeletonBlock className="h-14 rounded-xl" />
+  1110→  1110→          </div>
+  1111→  1111→          <SkeletonBlock className="mt-3 h-11 w-full rounded-xl" />
+  1112→  1112→        </div>
+  1113→  1113→      ))}
+  1114→  1114→    </div>
+  1115→  1115→  )
+  1116→  1116→}
+  1117→  1117→

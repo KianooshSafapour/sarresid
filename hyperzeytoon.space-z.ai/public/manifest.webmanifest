@@ -1,0 +1,26 @@
+{
+  "name": "پلتفرم هایپر زیتون",
+  "short_name": "هایپر زیتون",
+  "description": "سامانه یکپارچه مدیریت فروشگاه هایپر زیتون کرمان",
+  "start_url": "/",
+  "display": "standalone",
+  "dir": "rtl",
+  "lang": "fa",
+  "background_color": "#faf7f0",
+  "theme_color": "#232d26",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/brand/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/brand/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

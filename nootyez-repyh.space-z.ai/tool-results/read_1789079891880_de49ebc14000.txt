@@ -1,0 +1,631 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * Hyper Zeytoon — Dashboard section (Task 5-a)
+     5→ * Role-aware luxurious overview: greeting hero, KPI stat cards, 14-day order/spend charts,
+     6→ * top-suppliers donut, staff leaderboard, low-stock list, activity feed, upcoming holidays.
+     7→ * Data source: GET /api/dashboard — fetched once + polled every 30s.
+     8→ */
+     9→import * as React from 'react'
+    10→import {
+    11→  LayoutDashboard, ShoppingCart, Truck, Package, CreditCard, CheckSquare, Users, Heart, RefreshCw, Sunrise, ChevronLeft,
+    12→} from 'lucide-react'
+    13→import {
+    14→  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
+    15→  AreaChart, Area, PieChart, Pie, Cell, Legend,
+    16→} from 'recharts'
+    17→import { api } from '@/lib/api'
+    18→import { useApp, type ViewKey } from '@/lib/store'
+    19→import { fmtJalali, fmtJalaliLong, fmtMoney, fmtMoneyShort, toFaDigits, todayISO, daysBetweenISO } from '@/lib/jalali'
+    20→import { hasRole, type PUser } from '@/lib/types'
+    21→import {
+    22→  Card, SectionHeader, StatCard, StockBadge, stockDot, Badge, Avatar, EmptyState, Loading, TimeAgo,
+    23→} from '@/components/platform/kit'
+    24→import { cn } from '@/lib/utils'
+    25→
+    26→/* ================= Types (shape confirmed against src/app/api/dashboard/route.ts) ================= */
+    27→
+    28→interface DashData {
+    29→  counts: {
+    30→    ordersActive: number
+    31→    ordersToday: number
+    32→    lowStock: number
+    33→    chequesPendingOwner: number
+    34→    chequesDueSoon: number
+    35→    tasksOpen: number
+    36→    preordersPending: number
+    37→    customers: number
+    38→  }
+    39→  ordersByStatus: { status: string; count: number }[]
+    40→  ordersPerDay: { date: string; count: number; total: number }[]
+    41→  spendPerDay: { date: string; total: number }[]
+    42→  topSuppliers: { name: string; count: number; total: number }[]
+    43→  lowStockItems: { name: string; stock: number; minStock: number }[]
+    44→  recentEvents: { id: number; orderId: number; code: string; userName: string; action: string; detail: string | null; createdAt: string }[]
+    45→  staffPoints: { name: string; points: number; color: string }[]
+    46→  holidays: { date: string; title: string }[]
+    47→}
+    48→
+    49→/* ================= Local helpers ================= */
+    50→
+    51→const PIE_COLORS = ['#3E6B4A', '#93C572', '#B8860B', '#DAA520', '#7A5C2E']
+    52→
+    53→const TOOLTIP_STYLE: React.CSSProperties = {
+    54→  borderRadius: 12,
+    55→  border: '1px solid #E4DCC8',
+    56→  background: '#FFFDF7',
+    57→  fontSize: 12,
+    58→  direction: 'rtl',
+    59→}
+    60→
+    61→const ACTION_LABELS: Record<string, string> = {
+    62→  CREATED: 'سفارش جدیدی ثبت کرد',
+    63→  UPDATED: 'سفارش را ویرایش کرد',
+    64→  SUBMITTED: 'سفارش را برای تایید فرستاد',
+    65→  APPROVED: 'سفارش را تایید کرد',
+    66→  REJECTED: 'سفارش را رد کرد',
+    67→  CORRECTION: 'اصلاحیه‌ای ثبت کرد',
+    68→  CANCELLED: 'سفارش را لغو کرد',
+    69→  RECEIVED: 'دریافت کالا را انجام داد',
+    70→  CONFIRMED: 'تایید نهایی انبار را ثبت کرد',
+    71→  DONE: 'سفارش را در حسابداری بست',
+    72→  BARCODE_ADDED: 'بارکد محصول را ثبت کرد',
+    73→}
+    74→
+    75→function roleSubtitle(u: PUser): string {
+    76→  if (hasRole(u, 'OWNER') || hasRole(u, 'GENERAL_MANAGER')) return 'نمای کلی مدیریت هایپر زیتون | Management overview'
+    77→  if (hasRole(u, 'ACCOUNTANT')) return 'صف مالی، تسویه و چک‌ها | Financial queue'
+    78→  if (hasRole(u, 'DELIVERY_RECEIVER') || hasRole(u, 'INVENTORY_SUPERVISOR')) return 'تحویل‌ها و موجودی امروز | Today’s deliveries'
+    79→  if (hasRole(u, 'PRODUCT_MANAGER')) return 'سفارش‌ها و موجودی کالا | Orders & stock'
+    80→  if (hasRole(u, 'OPERATION_MANAGER')) return 'عملیات روزانه فروشگاه | Daily store operations'
+    81→  if (hasRole(u, 'IT_ADMIN')) return 'پایش سیستم و پشتیبانی | System & support'
+    82→  return 'امروز چه کارهایی در جریان است | What’s happening today'
+    83→}
+    84→
+    85→/* ================= Component ================= */
+    86→
+    87→export default function DashboardSection({ user }: { user: PUser }) {
+    88→  const setView = useApp((s) => s.setView)
+    89→  const openOrder = useApp((s) => s.openOrder)
+    90→
+    91→  const [data, setData] = React.useState<DashData | null>(null)
+    92→  const [loading, setLoading] = React.useState(true)
+    93→  const [error, setError] = React.useState<string | null>(null)
+    94→
+    95→  const load = React.useCallback(async (silent = false) => {
+    96→    if (!silent) setLoading(true)
+    97→    try {
+    98→      const d = await api.get<DashData>('/api/dashboard')
+    99→      setData(d)
+   100→      setError(null)
+   101→    } catch (e) {
+   102→      setError(e instanceof Error ? e.message : 'خطا در دریافت داشبورد')
+   103→    } finally {
+   104→      setLoading(false)
+   105→    }
+   106→  }, [])
+   107→
+   108→  React.useEffect(() => {
+   109→    load()
+   110→    const t = setInterval(() => load(true), 30000) // poll every 30s
+   111→    return () => clearInterval(t)
+   112→  }, [load])
+   113→
+   114→  // Prefer the Persian role-name in parentheses (e.g. "مدیر عامل") for clean RTL greeting;
+   115→  // fall back to the Latin first name when no parenthetical exists.
+   116→  const persianName = user.name.match(/\(([^)]+)\)/)?.[1]?.trim()
+   117→  const firstName = persianName || user.name.replace(/\(.*\)/, '').trim().split(/\s+/)[0] || user.name
+   118→  const c = data?.counts
+   119→
+   120→  const stats: { label: string; sub: string; value: number; icon: React.ReactNode; tone: 'olive' | 'gold' | 'rose'; view: ViewKey }[] = [
+   121→    { label: 'سفارش‌های فعال', sub: 'Active orders', value: c?.ordersActive ?? 0, icon: <ShoppingCart size={20} />, tone: 'olive', view: 'orders' },
+   122→    { label: 'تحویل‌های امروز', sub: 'Today’s deliveries', value: c?.ordersToday ?? 0, icon: <Truck size={20} />, tone: 'olive', view: 'deliveries' },
+   123→    { label: 'کالاهای کم‌موجودی', sub: 'Low stock items', value: c?.lowStock ?? 0, icon: <Package size={20} />, tone: (c?.lowStock ?? 0) > 5 ? 'rose' : 'olive', view: 'products' },
+   124→    { label: 'چک در انتظار مالک', sub: 'Cheques awaiting owner', value: c?.chequesPendingOwner ?? 0, icon: <CreditCard size={20} />, tone: 'gold', view: 'payments' },
+   125→    { label: 'کارهای باز', sub: 'Open tasks', value: c?.tasksOpen ?? 0, icon: <CheckSquare size={20} />, tone: 'olive', view: 'tasks' },
+   126→    { label: 'پیش‌سفارش‌ها', sub: 'Pending preorders', value: c?.preordersPending ?? 0, icon: <Users size={20} />, tone: 'gold', view: 'crm' },
+   127→  ]
+   128→
+   129→  const topSuppliersPie = (data?.topSuppliers ?? []).map((s) => ({ name: s.name, value: s.count }))
+   130→  const totalSupplierOrders = (data?.topSuppliers ?? []).reduce((s, x) => s + x.count, 0)
+   131→
+   132→  /* ---------- loading / error gates ---------- */
+   133→  if (!data && loading) {
+   134→    return (
+   135→      <div className="text-right">
+   136→        <SectionHeader title="داشبورد | Dashboard" subtitle={roleSubtitle(user)} icon={<LayoutDashboard size={22} />} />
+   137→        <Loading label="در حال آماده‌سازی داشبورد…" />
+   138→      </div>
+   139→    )
+   140→  }
+   141→  if (!data) {
+   142→    return (
+   143→      <div className="text-right">
+   144→        <SectionHeader title="داشبورد | Dashboard" subtitle={roleSubtitle(user)} icon={<LayoutDashboard size={22} />} />
+   145→        <Card className="p-6">
+   146→          <EmptyState icon={<LayoutDashboard size={30} />} title="داشبورد بارگذاری نشد" hint={error ?? undefined} />
+   147→          <div className="mt-4 flex justify-center">
+   148→            <PrimaryRetry onClick={() => load()} />
+   149→          </div>
+   150→        </Card>
+   151→      </div>
+   152→    )
+   153→  }
+   154→
+   155→  return (
+   156→    <div className="space-y-5 text-right">
+   157→      <SectionHeader
+   158→        title="داشبورد | Dashboard"
+   159→        subtitle={roleSubtitle(user)}
+   160→        icon={<LayoutDashboard size={22} />}
+   161→        actions={
+   162→          <GhostRefresh loading={loading} onClick={() => load()} />
+   163→        }
+   164→      />
+   165→
+   166→      {/* ---------- Greeting hero ---------- */}
+   167→      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-l from-[#2F4A36] via-[#3E6B4A] to-[#4F7F58] p-5 text-white shadow-lg sm:p-6">
+   168→        <PatternDots />
+   169→        <div className="relative flex flex-wrap items-center justify-between gap-4">
+   170→          <div className="min-w-0">
+   171→            <div className="text-xs font-medium text-white/70 sm:text-sm">{roleSubtitle(user)}</div>
+   172→            <h1 dir="rtl" className="mt-1 text-2xl font-extrabold tracking-tight sm:text-3xl">سلام {firstName} 👋</h1>
+   173→            <div className="mt-1.5 text-sm text-white/80">{fmtJalaliLong(new Date())}</div>
+   174→          </div>
+   175→          <div className="flex shrink-0 items-center gap-2">
+   176→            <span className="inline-flex items-center gap-1.5 rounded-full border border-[#F0D890]/60 bg-[#B8860B]/30 px-3.5 py-2 text-sm font-bold text-[#FFE9A8] shadow-inner">
+   177→              ⭐ {toFaDigits(user.points)} امتیاز | Points
+   178→            </span>
+   179→          </div>
+   180→        </div>
+   181→      </div>
+   182→
+   183→      {/* ---------- Today briefing ---------- */}
+   184→      <BriefingCard user={user} />
+   185→
+   186→      {/* ---------- Stat cards ---------- */}
+   187→      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+   188→        {stats.map((s) => (
+   189→          <StatCard
+   190→            key={s.label}
+   191→            label={s.label}
+   192→            sub={s.sub}
+   193→            value={toFaDigits(s.value)}
+   194→            icon={s.icon}
+   195→            tone={s.tone}
+   196→            onClick={() => setView(s.view)}
+   197→          />
+   198→        ))}
+   199→      </div>
+   200→
+   201→      {/* ---------- Charts row ---------- */}
+   202→      <div className="grid gap-4 lg:grid-cols-2">
+   203→        <Card className="p-4">
+   204→          <div className="mb-3 flex items-center justify-between gap-2">
+   205→            <h3 className="text-sm font-bold text-[#253A2A]">سفارش‌های ۱۴ روز اخیر | Orders — last 14 days</h3>
+   206→            <Badge className="border-[#C8D8C0] bg-[#F3F7EF] text-[#3E6B4A]">
+   207→              مجموع {toFaDigits(data.ordersPerDay.reduce((s, b) => s + b.count, 0))}
+   208→            </Badge>
+   209→          </div>
+   210→          <div className="h-64 w-full" dir="ltr">
+   211→            <ResponsiveContainer width="100%" height="100%">
+   212→              <BarChart data={data.ordersPerDay} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
+   213→                <CartesianGrid strokeDasharray="3 3" stroke="#EFEAD8" vertical={false} />
+   214→                <XAxis
+   215→                  dataKey="date"
+   216→                  tick={{ fill: '#8A9884', fontSize: 10 }}
+   217→                  tickFormatter={(v) => toFaDigits(String(v))}
+   218→                  axisLine={{ stroke: '#E4DCC8' }}
+   219→                  tickLine={false}
+   220→                />
+   221→                <YAxis allowDecimals={false} tick={{ fill: '#8A9884', fontSize: 10 }} width={30} axisLine={false} tickLine={false} />
+   222→                <Tooltip
+   223→                  contentStyle={TOOLTIP_STYLE}
+   224→                  cursor={{ fill: 'rgba(95,143,85,0.08)' }}
+   225→                  formatter={(v) => [`${toFaDigits(Number(v))} سفارش`, 'تعداد']}
+   226→                />
+   227→                <Bar dataKey="count" fill="#5F8F55" radius={[6, 6, 0, 0]} maxBarSize={26} />
+   228→              </BarChart>
+   229→            </ResponsiveContainer>
+   230→          </div>
+   231→        </Card>
+   232→
+   233→        <Card className="p-4">
+   234→          <div className="mb-3 flex items-center justify-between gap-2">
+   235→            <h3 className="text-sm font-bold text-[#253A2A]">ارزش خرید روزانه | Daily spend</h3>
+   236→            <Badge className="border-[#EAD9A8] bg-[#FBF3DC] text-[#8A6508]">
+   237→              {fmtMoneyShort(data.spendPerDay.reduce((s, b) => s + b.total, 0))}
+   238→            </Badge>
+   239→          </div>
+   240→          <div className="h-64 w-full" dir="ltr">
+   241→            <ResponsiveContainer width="100%" height="100%">
+   242→              <AreaChart data={data.spendPerDay} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
+   243→                <defs>
+   244→                  <linearGradient id="spendFill" x1="0" y1="0" x2="0" y2="1">
+   245→                    <stop offset="0%" stopColor="#DAA520" stopOpacity={0.35} />
+   246→                    <stop offset="100%" stopColor="#DAA520" stopOpacity={0.04} />
+   247→                  </linearGradient>
+   248→                </defs>
+   249→                <CartesianGrid strokeDasharray="3 3" stroke="#EFEAD8" vertical={false} />
+   250→                <XAxis
+   251→                  dataKey="date"
+   252→                  tick={{ fill: '#8A9884', fontSize: 10 }}
+   253→                  tickFormatter={(v) => toFaDigits(String(v))}
+   254→                  axisLine={{ stroke: '#E4DCC8' }}
+   255→                  tickLine={false}
+   256→                />
+   257→                <YAxis
+   258→                  tick={{ fill: '#8A9884', fontSize: 10 }}
+   259→                  width={52}
+   260→                  tickFormatter={(v) => fmtMoneyShort(Number(v))}
+   261→                  axisLine={false}
+   262→                  tickLine={false}
+   263→                />
+   264→                <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => fmtMoney(Number(v))} />
+   265→                <Area type="monotone" dataKey="total" stroke="#B8860B" strokeWidth={2} fill="url(#spendFill)" fillOpacity={1} />
+   266→              </AreaChart>
+   267→            </ResponsiveContainer>
+   268→          </div>
+   269→        </Card>
+   270→      </div>
+   271→
+   272→      {/* ---------- Top suppliers + Staff leaderboard ---------- */}
+   273→      <div className="grid gap-4 lg:grid-cols-2">
+   274→        <Card className="p-4">
+   275→          <div className="mb-3 flex items-center justify-between gap-2">
+   276→            <h3 className="text-sm font-bold text-[#253A2A]">تأمین‌کنندگان برتر | Top suppliers</h3>
+   277→            <Badge className="border-[#C8D8C0] bg-[#F3F7EF] text-[#3E6B4A]">{toFaDigits(totalSupplierOrders)} سفارش</Badge>
+   278→          </div>
+   279→          {topSuppliersPie.length === 0 ? (
+   280→            <EmptyState title="سفارشی برای تأمین‌کنندگان ثبت نشده" />
+   281→          ) : (
+   282→            <div className="h-64 w-full" dir="ltr">
+   283→              <ResponsiveContainer width="100%" height="100%">
+   284→                <PieChart>
+   285→                  <Pie
+   286→                    data={topSuppliersPie}
+   287→                    dataKey="value"
+   288→                    nameKey="name"
+   289→                    innerRadius={52}
+   290→                    outerRadius={82}
+   291→                    paddingAngle={2}
+   292→                    stroke="#FFFDF7"
+   293→                  >
+   294→                    {topSuppliersPie.map((entry, i) => (
+   295→                      <Cell key={entry.name} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+   296→                    ))}
+   297→                  </Pie>
+   298→                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v, name) => [`${toFaDigits(Number(v))} سفارش`, String(name)]} />
+   299→                  <Legend wrapperStyle={{ fontSize: 11, direction: 'rtl' }} iconType="circle" />
+   300→                </PieChart>
+   301→              </ResponsiveContainer>
+   302→            </div>
+   303→          )}
+   304→        </Card>
+   305→
+   306→        <Card className="p-4">
+   307→          <div className="mb-3 flex items-center justify-between gap-2">
+   308→            <h3 className="text-sm font-bold text-[#253A2A]">جدول امتیاز همکاران | Staff leaderboard</h3>
+   309→            <Badge className="border-[#EAD9A8] bg-[#FBF3DC] text-[#8A6508]">۵ نفر برتر | Top 5</Badge>
+   310→          </div>
+   311→          <div className="max-h-64 space-y-2 overflow-y-auto pz-scroll pl-1">
+   312→            {(data.staffPoints ?? []).slice(0, 5).map((s, i) => (
+   313→              <div
+   314→                key={s.name}
+   315→                className={cn(
+   316→                  'flex min-h-[44px] items-center gap-3 rounded-xl border p-2.5',
+   317→                  i === 0
+   318→                    ? 'border-[#EAD9A8] bg-gradient-to-l from-[#B8860B]/10 to-[#F0D890]/20 shadow-sm'
+   319→                    : 'border-[#EFEAD8] bg-white/60'
+   320→                )}
+   321→              >
+   322→                <span className="w-8 shrink-0 text-center text-lg leading-none">
+   323→                  {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : <span className="text-sm font-bold text-[#8A9884]">{toFaDigits(i + 1)}</span>}
+   324→                </span>
+   325→                <Avatar name={s.name} color={s.color || '#5F8F55'} size={36} />
+   326→                <span className="min-w-0 flex-1 truncate text-sm font-bold text-[#33402F]">{s.name}</span>
+   327→                <Badge className="shrink-0 border-[#EAD9A8] bg-[#FBF3DC] tabular-nums text-[#8A6508]">
+   328→                  ⭐ {toFaDigits(s.points)}
+   329→                </Badge>
+   330→              </div>
+   331→            ))}
+   332→            {(data.staffPoints ?? []).length === 0 && <EmptyState title="امتیازی ثبت نشده" />}
+   333→          </div>
+   334→        </Card>
+   335→      </div>
+   336→
+   337→      {/* ---------- Low stock / Activity / Holidays ---------- */}
+   338→      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+   339→        {/* Low stock */}
+   340→        <Card className="p-4">
+   341→          <div className="mb-2 flex items-center justify-between gap-2">
+   342→            <h3 className="flex items-center gap-2 text-sm font-bold text-[#253A2A]">
+   343→              <Package size={16} className="text-[#B8860B]" /> کمبود موجودی | Low stock
+   344→            </h3>
+   345→            <Badge className={cn('tabular-nums', (data.counts.lowStock ?? 0) > 5 ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-[#C8D8C0] bg-[#F3F7EF] text-[#3E6B4A]')}>
+   346→              {toFaDigits(data.counts.lowStock)}
+   347→            </Badge>
+   348→          </div>
+   349→          {data.lowStockItems.length === 0 ? (
+   350→            <EmptyState title="موجودی همه کالاها سالم است ✅" hint="نیازی به سفارش فوری نیست." />
+   351→          ) : (
+   352→            <div className="max-h-72 overflow-y-auto pz-scroll pl-1">
+   353→              {data.lowStockItems.map((it, i) => (
+   354→                <button
+   355→                  key={`${it.name}-${i}`}
+   356→                  type="button"
+   357→                  onClick={() => setView('products')}
+   358→                  className="flex min-h-[44px] w-full items-center justify-between gap-2 rounded-xl px-2 py-2 text-right transition hover:bg-[#F5F2E8]"
+   359→                >
+   360→                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-[#33402F]">{it.name}</span>
+   361→                  <span className={cn('shrink-0 text-xs font-bold tabular-nums', stockDot(it.stock, it.minStock))}>
+   362→                    {toFaDigits(it.stock)} / {toFaDigits(it.minStock)}
+   363→                  </span>
+   364→                  <StockBadge stock={it.stock} minStock={it.minStock} />
+   365→                </button>
+   366→              ))}
+   367→            </div>
+   368→          )}
+   369→        </Card>
+   370→
+   371→        {/* Recent activity */}
+   372→        <Card className="p-4">
+   373→          <div className="mb-2 flex items-center justify-between gap-2">
+   374→            <h3 className="flex items-center gap-2 text-sm font-bold text-[#253A2A]">
+   375→              <RefreshCw size={16} className="text-[#3E6B4A]" /> آخرین فعالیت‌ها | Recent activity
+   376→            </h3>
+   377→            <Badge className="border-[#C8D8C0] bg-[#F3F7EF] text-[#3E6B4A]">{toFaDigits(data.recentEvents.length)}</Badge>
+   378→          </div>
+   379→          {data.recentEvents.length === 0 ? (
+   380→            <EmptyState title="فعالیتی ثبت نشده" />
+   381→          ) : (
+   382→            <div className="max-h-72 overflow-y-auto pz-scroll pl-1">
+   383→              {data.recentEvents.map((ev) => (
+   384→                <div key={ev.id} className="flex items-start justify-between gap-2 border-b border-[#EFEAD8] py-2.5 last:border-0">
+   385→                  <div className="min-w-0">
+   386→                    <div className="text-xs leading-5">
+   387→                      <span className="font-bold text-[#33402F]">{ev.userName}</span>{' '}
+   388→                      <span className="text-[#6B7A66]">{ACTION_LABELS[ev.action] ?? ev.action}</span>
+   389→                    </div>
+   390→                    {ev.detail && <div className="truncate text-[11px] text-[#8A9884]">{ev.detail}</div>}
+   391→                  </div>
+   392→                  <div className="flex shrink-0 flex-col items-end gap-1">
+   393→                    <TimeAgo iso={ev.createdAt} />
+   394→                    {/* recentEvents payload includes orderId + code (confirmed in API) → clickable */}
+   395→                    {ev.orderId && ev.code ? (
+   396→                      <button
+   397→                        type="button"
+   398→                        onClick={() => openOrder(ev.orderId)}
+   399→                        title="مشاهده سفارش"
+   400→                        className="pz-barcode rounded-md bg-[#F5F2E8] px-1.5 py-0.5 text-[10px] font-bold text-[#8A6508] transition hover:bg-[#F0E9D2]"
+   401→                      >
+   402→                        {ev.code}
+   403→                      </button>
+   404→                    ) : null}
+   405→                  </div>
+   406→                </div>
+   407→              ))}
+   408→            </div>
+   409→          )}
+   410→        </Card>
+   411→
+   412→        {/* Upcoming holidays */}
+   413→        <Card className="p-4 xl:col-span-1 lg:col-span-2">
+   414→          <div className="mb-2 flex items-center justify-between gap-2">
+   415→            <h3 className="flex items-center gap-2 text-sm font-bold text-[#253A2A]">
+   416→              <Heart size={16} className="fill-rose-500 text-rose-500" /> تعطیلات پیش رو | Upcoming holidays
+   417→            </h3>
+   418→            <Badge className="border-rose-200 bg-rose-50 text-rose-700">{toFaDigits(data.holidays.length)}</Badge>
+   419→          </div>
+   420→          {data.holidays.length === 0 ? (
+   421→            <EmptyState title="تعطیلی در فهرست نیست" hint="از بخش تقویم می‌توانید تعطیلی اضافه کنید." />
+   422→          ) : (
+   423→            <div className="max-h-72 overflow-y-auto pz-scroll pl-1">
+   424→              {data.holidays.map((h) => (
+   425→                <div key={h.date} className="flex min-h-[44px] items-center justify-between gap-2 rounded-xl px-2 py-2 transition hover:bg-[#FDF2F4]">
+   426→                  <div className="flex min-w-0 items-center gap-2">
+   427→                    <Heart size={15} className="shrink-0 fill-rose-400 text-rose-400" />
+   428→                    <span className="truncate text-sm font-medium text-[#33402F]">{h.title}</span>
+   429→                  </div>
+   430→                  <span className="shrink-0 rounded-lg bg-rose-50 px-2 py-0.5 text-xs font-bold tabular-nums text-rose-600">
+   431→                    {fmtJalali(h.date)}
+   432→                  </span>
+   433→                </div>
+   434→              ))}
+   435→            </div>
+   436→          )}
+   437→        </Card>
+   438→      </div>
+   439→    </div>
+   440→  )
+   441→}
+   442→
+   443→/* ================= Small local presentational bits ================= */
+   444→
+   445→function GhostRefresh({ loading, onClick }: { loading: boolean; onClick: () => void }) {
+   446→  return (
+   447→    <button
+   448→      type="button"
+   449→      onClick={onClick}
+   450→      disabled={loading}
+   451→      className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-[#D8D2BC] bg-white/80 px-3.5 py-2 text-sm font-medium text-[#4A5A44] transition-all hover:border-[#5F8F55] hover:bg-[#F3F7EF] active:scale-[0.98] disabled:opacity-50"
+   452→    >
+   453→      <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+   454→      <span className="hidden sm:inline">به‌روزرسانی | Refresh</span>
+   455→    </button>
+   456→  )
+   457→}
+   458→
+   459→function PrimaryRetry({ onClick }: { onClick: () => void }) {
+   460→  return (
+   461→    <button
+   462→      type="button"
+   463→      onClick={onClick}
+   464→      className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-gradient-to-b from-[#4A7A52] to-[#3A6242] px-4 py-2.5 text-sm font-semibold text-white shadow-md transition-all hover:brightness-110 active:scale-[0.98]"
+   465→    >
+   466→      <RefreshCw size={16} /> تلاش مجدد | Retry
+   467→    </button>
+   468→  )
+   469→}
+   470→
+   471→/** Subtle paisley-flavored dot grid for the hero banner (pure CSS, no external asset) */
+   472→function PatternDots() {
+   473→  return (
+   474→    <div
+   475→      aria-hidden
+   476→      className="pointer-events-none absolute inset-0 opacity-[0.10]"
+   477→      style={{
+   478→        backgroundImage: 'radial-gradient(circle, #FFFFFF 1px, transparent 1px)',
+   479→        backgroundSize: '18px 18px',
+   480→      }}
+   481→    />
+   482→  )
+   483→}
+   484→
+   485→/* ================= Today Briefing (morning meeting card) ================= */
+   486→
+   487→interface BriefingData {
+   488→  deliveries: { id: number; code: string; supplier: string; total: number; overdue: boolean }[]
+   489→  cheques: { id: number; amount: number; dueDate: string; status: string }[]
+   490→  urgentTasks: { id: number; title: string; priority: string; dueDate: string | null; mine: boolean }[]
+   491→}
+   492→
+   493→function BriefingCard({ user }: { user: PUser }) {
+   494→  const setView = useApp((s) => s.setView)
+   495→  const openOrder = useApp((s) => s.openOrder)
+   496→  const [data, setData] = React.useState<BriefingData | null>(null)
+   497→
+   498→  React.useEffect(() => {
+   499→    let alive = true
+   500→    Promise.all([
+   501→      api.get<{ orders: { id: number; code: string; status: string; receivingDate: string; total: number; supplier?: { name: string } }[] }>('/api/orders?active=1'),
+   502→      api.get<{ cheques: { id: number; amount: number; dueDate: string; status: string }[] }>('/api/cheques'),
+   503→      api.get<{ tasks: { id: number; title: string; priority: string; status: string; dueDate: string | null; assignedToId: number }[] }>('/api/tasks'),
+   504→    ])
+   505→      .then(([o, ch, t]) => {
+   506→        if (!alive) return
+   507→        const today = todayISO()
+   508→        const deliveries = o.orders
+   509→          .filter((x) => ['APPROVED', 'SUBMITTED'].includes(x.status))
+   510→          .map((x) => ({
+   511→            id: x.id,
+   512→            code: x.code,
+   513→            supplier: x.supplier?.name ?? '—',
+   514→            total: x.total,
+   515→            overdue: daysBetweenISO(today, x.receivingDate.slice(0, 10)) < 0,
+   516→          }))
+   517→          .sort((a, b) => Number(b.overdue) - Number(a.overdue))
+   518→          .slice(0, 4)
+   519→        const cheques = ch.cheques
+   520→          .filter((x) => ['APPROVED', 'WRITTEN', 'SIGNED', 'GIVEN'].includes(x.status))
+   521→          .filter((x) => { const d = daysBetweenISO(today, x.dueDate.slice(0, 10)); return d >= -3 && d <= 7 })
+   522→          .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+   523→          .slice(0, 3)
+   524→        const urgentTasks = t.tasks
+   525→          .filter((x) => ['OPEN', 'IN_PROGRESS', 'PAUSED'].includes(x.status))
+   526→          .filter((x) => x.priority === 'URGENT' || x.priority === 'HIGH' || x.assignedToId === user.id)
+   527→          .slice(0, 4)
+   528→          .map((x) => ({ id: x.id, title: x.title, priority: x.priority, dueDate: x.dueDate, mine: x.assignedToId === user.id }))
+   529→        setData({ deliveries, cheques, urgentTasks })
+   530→      })
+   531→      .catch(() => { if (alive) setData({ deliveries: [], cheques: [], urgentTasks: [] }) })
+   532→    return () => { alive = false }
+   533→  }, [user.id])
+   534→
+   535→  const empty = !data || (data.deliveries.length === 0 && data.cheques.length === 0 && data.urgentTasks.length === 0)
+   536→  if (empty) return null
+   537→
+   538→  return (
+   539→    <div className="relative overflow-hidden rounded-2xl border border-[#EAD9A8] bg-gradient-to-l from-[#FBF3DC] via-[#FAF7EF] to-[#F3F7EF] p-4 shadow-sm sm:p-5">
+   540→      <div className="mb-3 flex items-center gap-2">
+   541→        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-[#DAA520] to-[#B8860B] text-white shadow">
+   542→          <Sunrise size={16} />
+   543→        </span>
+   544→        <div>
+   545→          <h3 className="text-sm font-bold text-[#253A2A]">بریفینگ امروز | Today at a glance</h3>
+   546→          <p className="text-[11px] text-[#8A9884]">خلاصه صبحگاهی برای جلسه ۲ دقیقه‌ای صبح</p>
+   547→        </div>
+   548→      </div>
+   549→      <div className="grid gap-3 md:grid-cols-3">
+   550→        {/* Deliveries — div (role=button) because it contains an inner real button */}
+   551→        <div
+   552→          role="button"
+   553→          tabIndex={0}
+   554→          onClick={() => setView('deliveries')}
+   555→          onKeyDown={(e) => { if (e.key === 'Enter') setView('deliveries') }}
+   556→          className="cursor-pointer rounded-xl border border-[#E4DCC8] bg-white/80 p-3 text-right transition hover:border-[#93C572] hover:shadow-sm"
+   557→        >
+   558→          <div className="mb-2 flex items-center justify-between">
+   559→            <span className="text-xs font-bold text-[#4A5A44]">🚚 تحویل‌های در راه</span>
+   560→            <ChevronLeft size={14} className="text-[#A8A28C]" />
+   561→          </div>
+   562→          {data!.deliveries.length === 0 ? (
+   563→            <div className="text-[11px] text-[#8A9884]">امروز تحویلی در راه نیست</div>
+   564→          ) : (
+   565→            <div className="space-y-1.5">
+   566→              {data!.deliveries.map((d) => (
+   567→                <div key={d.id} className="flex items-center justify-between gap-2 text-[11px]">
+   568→                  <button
+   569→                    type="button"
+   570→                    onClick={(e) => { e.stopPropagation(); openOrder(d.id) }}
+   571→                    className="pz-barcode shrink-0 font-bold text-[#3E6B4A] hover:underline"
+   572→                  >
+   573→                    {d.code}
+   574→                  </button>
+   575→                  <span className="min-w-0 flex-1 truncate text-[#6B7A66]">{d.supplier}</span>
+   576→                  {d.overdue && <span className="shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[9px] font-bold text-red-600">معوق!</span>}
+   577→                </div>
+   578→              ))}
+   579→            </div>
+   580→          )}
+   581→        </div>
+   582→        {/* Cheques */}
+   583→        <button type="button" onClick={() => setView('payments')} className="rounded-xl border border-[#E4DCC8] bg-white/80 p-3 text-right transition hover:border-[#93C572] hover:shadow-sm">
+   584→          <div className="mb-2 flex items-center justify-between">
+   585→            <span className="text-xs font-bold text-[#4A5A44]">💳 چک‌های نزدیک</span>
+   586→            <ChevronLeft size={14} className="text-[#A8A28C]" />
+   587→          </div>
+   588→          {data!.cheques.length === 0 ? (
+   589→            <div className="text-[11px] text-[#8A9884]">در ۷ روز آینده چکی سررسید نمی‌شود</div>
+   590→          ) : (
+   591→            <div className="space-y-1.5">
+   592→              {data!.cheques.map((ch) => {
+   593→                const dd = daysBetweenISO(todayISO(), ch.dueDate.slice(0, 10))
+   594→                return (
+   595→                  <div key={ch.id} className="flex items-center justify-between gap-2 text-[11px]">
+   596→                    <span className="shrink-0 font-bold text-[#8A6508]">{fmtMoneyShort(ch.amount)}</span>
+   597→                    <span className="text-[#6B7A66]">{fmtJalali(ch.dueDate)}</span>
+   598→                    <span className={cn('shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold', dd < 0 ? 'bg-red-100 text-red-600' : dd <= 2 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-50 text-emerald-700')}>
+   599→                      {dd < 0 ? 'گذشته!' : `${toFaDigits(dd)} روز`}
+   600→                    </span>
+   601→                  </div>
+   602→                )
+   603→              })}
+   604→            </div>
+   605→          )}
+   606→        </button>
+   607→        {/* Tasks */}
+   608→        <button type="button" onClick={() => setView('tasks')} className="rounded-xl border border-[#E4DCC8] bg-white/80 p-3 text-right transition hover:border-[#93C572] hover:shadow-sm">
+   609→          <div className="mb-2 flex items-center justify-between">
+   610→            <span className="text-xs font-bold text-[#4A5A44]">✅ کارهای فوری</span>
+   611→            <ChevronLeft size={14} className="text-[#A8A28C]" />
+   612→          </div>
+   613→          {data!.urgentTasks.length === 0 ? (
+   614→            <div className="text-[11px] text-[#8A9884]">کار فوری باز نیست — دمت گرم 🌿</div>
+   615→          ) : (
+   616→            <div className="space-y-1.5">
+   617→              {data!.urgentTasks.map((t) => (
+   618→                <div key={t.id} className="flex items-center gap-2 text-[11px]">
+   619→                  <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', t.priority === 'URGENT' ? 'bg-red-500' : 'bg-amber-500')} />
+   620→                  <span className="min-w-0 flex-1 truncate text-[#33402F]">{t.title}</span>
+   621→                  {t.mine && <span className="shrink-0 rounded-full bg-[#EFF5EA] px-1.5 py-0.5 text-[9px] font-bold text-[#3E6B4A]">من</span>}
+   622→                </div>
+   623→              ))}
+   624→            </div>
+   625→          )}
+   626→        </button>
+   627→      </div>
+   628→    </div>
+   629→  )
+   630→}
+   631→

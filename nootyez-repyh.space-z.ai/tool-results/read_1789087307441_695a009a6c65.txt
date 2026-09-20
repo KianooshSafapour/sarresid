@@ -1,0 +1,984 @@
+     1→'use client'
+     2→import * as React from 'react'
+     3→import { toast } from 'sonner'
+     4→import {
+     5→  AlertTriangle, CheckCircle2, ClipboardCheck, Eye, History, LayoutGrid, Minus,
+     6→  PackageCheck, Plus, ScanLine, Truck, XCircle,
+     7→} from 'lucide-react'
+     8→import { api } from '@/lib/api'
+     9→import { useApp } from '@/lib/store'
+    10→import { hasRole, type OrderT, type OrderItemT, type PUser } from '@/lib/types'
+    11→import { fmtJalali, fmtJalaliTime, fmtMoney, toFaDigits, todayISO } from '@/lib/jalali'
+    12→import { cn } from '@/lib/utils'
+    13→import {
+    14→  Badge, Card, EmptyState, Field, GhostButton, GoldButton, inputCls, Loading, Modal, Money,
+    15→  PrimaryButton, ProductImage, SectionHeader, Spinner, StatCard, StatusBadge, Tabs, TableWrap, Td, Th,
+    16→} from './kit'
+    17→import { DeliveryGridSkeleton, TableRowsSkeleton } from './Skeletons'
+    18→
+    19→/* =============== local types =============== */
+    20→
+    21→type ItemStatus = 'OK' | 'MISSING' | 'REJECTED'
+    22→type SheetMode = 'receive' | 'confirm'
+    23→
+    24→interface ListOrder {
+    25→  id: number
+    26→  code: string
+    27→  status: string
+    28→  receivingDate: string
+    29→  subtotal: number
+    30→  vat: number
+    31→  total: number
+    32→  createdAt: string
+    33→  doneAt: string | null
+    34→  supplier?: { id: number; name: string; paymentTerms?: string; chequeDays?: number } | null
+    35→  _count?: { items: number }
+    36→}
+    37→
+    38→interface DetailItem extends OrderItemT {
+    39→  product?: { id: number; name: string; barcode: string | null; imageUrl: string | null } | null
+    40→}
+    41→interface DetailOrder extends OrderT {
+    42→  items: DetailItem[]
+    43→}
+    44→
+    45→interface RowState {
+    46→  qty: number // deliveredQty (receive) / confirmedQty (confirm)
+    47→  printed: string
+    48→  final: string
+    49→  status: ItemStatus
+    50→  note: string
+    51→}
+    52→
+    53→const VAT_RATE = 0.09
+    54→const DELTA_TOLERANCE = 1000 // تومان
+    55→
+    56→/* =============== helpers =============== */
+    57→
+    58→/**
+    59→ * Normalize a scanned/typed order code for matching:
+    60→ * strip Code39 start/stop `*` and all whitespace, map Persian/Arabic digits
+    61→ * to ASCII (manual entry), uppercase. (Inline equivalent of sanitizeCode39
+    62→ * from lib/code39 — that one keeps spaces, which scanners do send, and its
+    63→ * charset filter would mangle the code shown in error messages.)
+    64→ */
+    65→function normalizeOrderCode(raw: string): string {
+    66→  return String(raw ?? '')
+    67→    .replace(/[\s*]+/g, '')
+    68→    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+    69→    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    70→    .toUpperCase()
+    71→}
+    72→
+    73→/** numeric input → number | null (accepts Persian digits too) */
+    74→function num(v: string): number | null {
+    75→  const t = String(v).trim().replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+    76→  if (!t) return null
+    77→  const n = Number(t)
+    78→  return isFinite(n) ? n : null
+    79→}
+    80→
+    81→const round1 = (n: number) => Math.round(n * 100) / 100
+    82→
+    83→function initRows(mode: SheetMode, order: DetailOrder): Record<number, RowState> {
+    84→  const rec: Record<number, RowState> = {}
+    85→  for (const it of order.items) {
+    86→    rec[it.id] = {
+    87→      qty: mode === 'receive'
+    88→        ? (it.deliveredQty ?? it.qty)
+    89→        : (it.confirmedQty ?? it.deliveredQty ?? it.qty),
+    90→      printed: String(it.printedPrice ?? it.unitCost ?? 0),
+    91→      final: String(it.finalCost ?? it.printedPrice ?? it.unitCost ?? 0),
+    92→      status: it.status === 'MISSING' || it.status === 'REJECTED' ? it.status : 'OK',
+    93→      note: it.note ?? '',
+    94→    }
+    95→  }
+    96→  return rec
+    97→}
+    98→
+    99→const STATUS_OPTS: { v: ItemStatus; label: string; activeCls: string; idleCls: string }[] = [
+   100→  { v: 'OK', label: 'سالم', activeCls: 'bg-emerald-500 border-emerald-600 text-white shadow-md', idleCls: 'border-emerald-200 bg-white text-emerald-700' },
+   101→  { v: 'MISSING', label: 'ناقص', activeCls: 'bg-amber-500 border-amber-600 text-white shadow-md', idleCls: 'border-amber-200 bg-white text-amber-700' },
+   102→  { v: 'REJECTED', label: 'مردود', activeCls: 'bg-rose-500 border-rose-600 text-white shadow-md', idleCls: 'border-rose-200 bg-white text-rose-700' },
+   103→]
+   104→
+   105→/* =============== qty stepper (44px touch targets) =============== */
+   106→
+   107→function QtyStepper({ label, value, onChange }: { label: string; value: number; onChange: (n: number) => void }) {
+   108→  return (
+   109→    <div className="min-w-0">
+   110→      <span className="mb-1 block text-xs font-semibold text-[#4A5A44]">{label}</span>
+   111→      <div className="flex items-center gap-1.5">
+   112→        <button
+   113→          type="button" aria-label="کاهش تعداد"
+   114→          onClick={() => onChange(Math.max(0, round1(value - 1)))}
+   115→          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#D8D2BC] bg-white text-[#4A5A44] transition hover:bg-[#F3F7EF] active:scale-95"
+   116→        >
+   117→          <Minus size={16} />
+   118→        </button>
+   119→        <input
+   120→          type="number" inputMode="decimal" min={0} step="any" aria-label={label}
+   121→          value={String(value)}
+   122→          onChange={(e) => { const n = Number(e.target.value); onChange(isFinite(n) && n >= 0 ? round1(n) : 0) }}
+   123→          className="h-11 w-full min-w-0 rounded-xl border border-[#D8D2BC] bg-white text-center text-sm font-bold tabular-nums text-[#253A2A] outline-none focus:border-[#5F8F55] focus:ring-2 focus:ring-[#93C572]/30"
+   124→        />
+   125→        <button
+   126→          type="button" aria-label="افزایش تعداد"
+   127→          onClick={() => onChange(round1(value + 1))}
+   128→          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#D8D2BC] bg-white text-[#4A5A44] transition hover:bg-[#F3F7EF] active:scale-95"
+   129→        >
+   130→          <Plus size={16} />
+   131→        </button>
+   132→      </div>
+   133→    </div>
+   134→  )
+   135→}
+   136→
+   137→/* =============== receive / confirm sheet =============== */
+   138→
+   139→function DeliverySheet({ orderId, mode, user, onClose, onDone }: {
+   140→  orderId: number | null
+   141→  mode: SheetMode
+   142→  user: PUser
+   143→  onClose: () => void
+   144→  onDone: () => void
+   145→}) {
+   146→  const [order, setOrder] = React.useState<DetailOrder | null>(null)
+   147→  const [loading, setLoading] = React.useState(false)
+   148→  const [rows, setRows] = React.useState<Record<number, RowState>>({})
+   149→  const [scan, setScan] = React.useState('')
+   150→  const [saving, setSaving] = React.useState(false)
+   151→  const [barcodeFor, setBarcodeFor] = React.useState<number | null>(null)
+   152→  const [barcodeVal, setBarcodeVal] = React.useState('')
+   153→
+   154→  React.useEffect(() => {
+   155→    if (orderId == null) { setOrder(null); return }
+   156→    let alive = true
+   157→    setLoading(true)
+   158→    setOrder(null)
+   159→    setScan(''); setBarcodeFor(null); setBarcodeVal('')
+   160→    api.get<DetailOrder>(`/api/orders/${orderId}`)
+   161→      .then((o) => { if (!alive) return; setOrder(o); setRows(initRows(mode, o)) })
+   162→      .catch(() => { if (!alive) return; toast.error('خطا در بارگذاری سفارش'); onClose() })
+   163→      .finally(() => { if (alive) setLoading(false) })
+   164→    return () => { alive = false }
+   165→  }, [orderId, mode, onClose])
+   166→
+   167→  const upd = (id: number, patch: Partial<RowState>) =>
+   168→    setRows((r) => (r[id] ? { ...r, [id]: { ...r[id], ...patch } } : r))
+   169→
+   170→  /* ---- barcode scan: mark item OK with full qty ---- */
+   171→  const handleScan = () => {
+   172→    const code = scan.trim()
+   173→    if (!code || !order) return
+   174→    const it = order.items.find((i) => (i.barcode ?? '') === code || (i.product?.barcode ?? '') === code)
+   175→    if (!it) { toast.error('قلمی با این بارکد در سفارش یافت نشد'); return }
+   176→    const q = mode === 'receive' ? it.qty : (it.deliveredQty ?? it.qty)
+   177→    upd(it.id, { status: 'OK', qty: q, note: '' })
+   178→    toast.success(`تایید شد ✓ — ${it.name}`)
+   179→    setScan('')
+   180→  }
+   181→
+   182→  /* ---- add barcode to an item (product) ---- */
+   183→  const saveBarcode = async (itemId: number) => {
+   184→    const barcode = barcodeVal.trim()
+   185→    if (!barcode || orderId == null) return
+   186→    try {
+   187→      await api.patch(`/api/orders/${orderId}`, { action: 'addBarcode', userId: user.id, itemId, barcode })
+   188→      toast.success('بارکد ذخیره شد ✓')
+   189→      setBarcodeVal('')
+   190→      setBarcodeFor(null)
+   191→      setOrder((o) => (o
+   192→        ? { ...o, items: o.items.map((i) => (i.id === itemId && !i.barcode ? { ...i, barcode } : i)) }
+   193→        : o))
+   194→    } catch (e) {
+   195→      toast.error(e instanceof Error ? e.message : 'خطا در ذخیره بارکد')
+   196→    }
+   197→  }
+   198→
+   199→  /* ---- recalc footer ---- */
+   200→  const totals = React.useMemo(() => {
+   201→    if (!order) return { subtotal: 0, vat: 0, total: 0 }
+   202→    let subtotal = 0
+   203→    for (const it of order.items) {
+   204→      const row = rows[it.id]
+   205→      if (!row) continue
+   206→      const cost = mode === 'receive'
+   207→        ? (num(row.printed) ?? it.unitCost)
+   208→        : (num(row.final) ?? it.printedPrice ?? it.unitCost)
+   209→      subtotal += cost * row.qty
+   210→    }
+   211→    const vat = subtotal * VAT_RATE
+   212→    return { subtotal, vat, total: subtotal + vat }
+   213→  }, [order, rows, mode])
+   214→
+   215→  const delta = order ? totals.total - order.total : 0
+   216→  const smallDelta = Math.abs(delta) <= DELTA_TOLERANCE
+   217→
+   218→  const submit = async () => {
+   219→    if (!order) return
+   220→    setSaving(true)
+   221→    try {
+   222→      const items = order.items.map((it) => {
+   223→        const row = rows[it.id] ?? { qty: 0, printed: '', final: '', status: 'OK' as ItemStatus, note: '' }
+   224→        return mode === 'receive'
+   225→          ? {
+   226→            id: it.id,
+   227→            deliveredQty: row.qty,
+   228→            printedPrice: num(row.printed),
+   229→            status: row.status,
+   230→            note: row.note || null,
+   231→            finalCost: num(row.printed),
+   232→          }
+   233→          : {
+   234→            id: it.id,
+   235→            confirmedQty: row.qty,
+   236→            finalCost: num(row.final),
+   237→            status: row.status,
+   238→            note: row.note || null,
+   239→          }
+   240→      })
+   241→      await api.patch(`/api/orders/${order.id}`, {
+   242→        action: mode === 'receive' ? 'receive' : 'confirm',
+   243→        userId: user.id,
+   244→        items,
+   245→      })
+   246→      toast.success(mode === 'receive' ? 'تحویل سفارش ثبت شد ✓' : 'تایید نهایی انبار ثبت شد ✓')
+   247→      onDone()
+   248→      onClose()
+   249→    } catch (e) {
+   250→      toast.error(e instanceof Error ? e.message : 'خطا در ثبت')
+   251→    } finally {
+   252→      setSaving(false)
+   253→    }
+   254→  }
+   255→
+   256→  const isToday = order ? order.receivingDate.slice(0, 10) === todayISO() : false
+   257→
+   258→  return (
+   259→    <Modal
+   260→      open={orderId != null}
+   261→      onClose={onClose}
+   262→      wide
+   263→      title={mode === 'receive' ? 'دریافت تحویل سفارش' : 'تایید نهایی انبار'}
+   264→    >
+   265→      {loading || !order ? (
+   266→        <Loading label="در حال بارگذاری اقلام سفارش…" />
+   267→      ) : (
+   268→        <div className="space-y-4">
+   269→          {/* ---- header ---- */}
+   270→          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[#E4DCC8] bg-white p-4">
+   271→            <div>
+   272→              <div className="flex items-center gap-2">
+   273→                <span className="text-lg font-extrabold text-[#253A2A]">{order.code}</span>
+   274→                <StatusBadge status={order.status} />
+   275→              </div>
+   276→              <div className="mt-0.5 text-sm text-[#6B7A66]">تامین‌کننده: <b className="text-[#3E6B4A]">{order.supplier?.name ?? '—'}</b></div>
+   277→            </div>
+   278→            <div className="text-left">
+   279→              <Badge className={isToday ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-[#E4DCC8] bg-[#F5F2E8] text-[#4A5A44]'}>
+   280→                {isToday ? 'تحویل صبح امروز' : `تحویل: ${fmtJalali(order.receivingDate)}`}
+   281→              </Badge>
+   282→              <div className="mt-1 text-xs text-[#8A9884]">
+   283→                جمع اصلی سفارش: <b className="tabular-nums">{fmtMoney(order.total)}</b> · {toFaDigits(order.items.length)} قلم
+   284→              </div>
+   285→            </div>
+   286→          </div>
+   287→
+   288→          {/* ---- scan box ---- */}
+   289→          <div className="flex items-center gap-2 rounded-xl border border-[#93C572]/50 bg-[#F3F7EF] px-3 py-1.5">
+   290→            <ScanLine size={18} className="shrink-0 text-[#3E6B4A]" />
+   291→            <input
+   292→              autoFocus
+   293→              value={scan}
+   294→              onChange={(e) => setScan(e.target.value)}
+   295→              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleScan() } }}
+   296→              placeholder="بارکد را اسکن کنید و Enter بزنید…"
+   297→              dir="ltr"
+   298→              className="h-11 w-full bg-transparent text-sm text-[#253A2A] outline-none placeholder:text-[#A8A28C]"
+   299→              aria-label="اسکن بارکد"
+   300→            />
+   301→          </div>
+   302→
+   303→          {/* ---- item cards ---- */}
+   304→          <div className="max-h-[46vh] space-y-3 overflow-y-auto pl-1 pz-scroll">
+   305→            {order.items.map((it) => {
+   306→              const row = rows[it.id]
+   307→              if (!row) return null
+   308→              const cost = mode === 'receive'
+   309→                ? (num(row.printed) ?? it.unitCost)
+   310→                : (num(row.final) ?? it.printedPrice ?? it.unitCost)
+   311→              const line = cost * row.qty
+   312→              return (
+   313→                <Card key={it.id} className="p-3">
+   314→                  {/* product head */}
+   315→                  <div className="flex items-center gap-3">
+   316→                    <ProductImage src={it.product?.imageUrl} name={it.name} size={48} />
+   317→                    <div className="min-w-0 flex-1">
+   318→                      <div className="truncate text-sm font-bold text-[#253A2A]">{it.name}</div>
+   319→                      <div className="font-mono text-[11px] text-[#8A9884]" dir="ltr">{it.barcode || it.product?.barcode || '—'}</div>
+   320→                      <div className="text-[11px] text-[#6B7A66]">
+   321→                        مقدار سفارش: <b className="tabular-nums">{toFaDigits(it.qty)}</b>
+   322→                        {mode === 'receive' && it.deliveredQty != null && <> · دریافتی قبلی: <b className="tabular-nums">{toFaDigits(it.deliveredQty)}</b></>}
+   323→                      </div>
+   324→                    </div>
+   325→                    <div className="shrink-0 text-left">
+   326→                      <div className="text-[10px] text-[#8A9884]">جمع خط</div>
+   327→                      <div className="text-xs font-bold tabular-nums text-[#3E6B4A]">{fmtMoney(line)}</div>
+   328→                    </div>
+   329→                  </div>
+   330→
+   331→                  {/* qty + price */}
+   332→                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+   333→                    <QtyStepper
+   334→                      label={mode === 'receive' ? 'تعداد دریافتی' : 'تعداد تایید نهایی'}
+   335→                      value={row.qty}
+   336→                      onChange={(n) => upd(it.id, { qty: n })}
+   337→                    />
+   338→                    {mode === 'receive' ? (
+   339→                      <Field label="قیمت چاپ‌شده (تومان)" hint="قیمت چاپ‌شده روی بسته">
+   340→                        <input
+   341→                          type="number" inputMode="decimal" min={0} step="any"
+   342→                          value={row.printed}
+   343→                          onChange={(e) => upd(it.id, { printed: e.target.value })}
+   344→                          className={inputCls}
+   345→                        />
+   346→                      </Field>
+   347→                    ) : (
+   348→                      <Field label="قیمت نهایی واحد (تومان)" hint="پیش‌فرض: قیمت چاپ‌شده / قیمت خرید">
+   349→                        <input
+   350→                          type="number" inputMode="decimal" min={0} step="any"
+   351→                          value={row.final}
+   352→                          onChange={(e) => upd(it.id, { final: e.target.value })}
+   353→                          className={inputCls}
+   354→                        />
+   355→                      </Field>
+   356→                    )}
+   357→                  </div>
+   358→
+   359→                  {/* status toggles */}
+   360→                  <div className="mt-3 grid grid-cols-3 gap-2">
+   361→                    {STATUS_OPTS.map((o) => (
+   362→                      <button
+   363→                        key={o.v} type="button"
+   364→                        onClick={() => upd(it.id, { status: o.v })}
+   365→                        aria-pressed={row.status === o.v}
+   366→                        className={cn(
+   367→                          'min-h-[44px] rounded-xl border-2 px-2 text-sm font-bold transition-all active:scale-[0.98]',
+   368→                          row.status === o.v ? o.activeCls : o.idleCls
+   369→                        )}
+   370→                      >
+   371→                        {o.label}
+   372→                      </button>
+   373→                    ))}
+   374→                  </div>
+   375→
+   376→                  {/* note when MISSING / REJECTED */}
+   377→                  {row.status !== 'OK' && (
+   378→                    <div className="mt-3">
+   379→                      <Field label="توضیح" hint="دلیل ناقص یا مردود بودن را بنویسید">
+   380→                        <input
+   381→                          value={row.note}
+   382→                          onChange={(e) => upd(it.id, { note: e.target.value })}
+   383→                          placeholder="مثلاً: ۲ عدد شکسته بود"
+   384→                          className={inputCls}
+   385→                        />
+   386→                      </Field>
+   387→                    </div>
+   388→                  )}
+   389→
+   390→                  {/* add barcode */}
+   391→                  <div className="mt-3">
+   392→                    {barcodeFor === it.id ? (
+   393→                      <div className="flex flex-col gap-2 sm:flex-row">
+   394→                        <input
+   395→                          autoFocus
+   396→                          value={barcodeVal}
+   397→                          onChange={(e) => setBarcodeVal(e.target.value)}
+   398→                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveBarcode(it.id) } }}
+   399→                          placeholder="بارکد جدید را اسکن/وارد کنید…"
+   400→                          dir="ltr"
+   401→                          className={cn(inputCls, 'font-mono')}
+   402→                        />
+   403→                        <div className="flex gap-2">
+   404→                          <PrimaryButton type="button" className="min-h-[44px] flex-1" onClick={() => saveBarcode(it.id)}>ذخیره بارکد</PrimaryButton>
+   405→                          <GhostButton type="button" className="min-h-[44px]" onClick={() => { setBarcodeFor(null); setBarcodeVal('') }}>لغو</GhostButton>
+   406→                        </div>
+   407→                      </div>
+   408→                    ) : (
+   409→                      <GhostButton type="button" className="min-h-[44px] w-full sm:w-auto" onClick={() => { setBarcodeFor(it.id); setBarcodeVal('') }}>
+   410→                        افزودن بارکد
+   411→                      </GhostButton>
+   412→                    )}
+   413→                  </div>
+   414→                </Card>
+   415→              )
+   416→            })}
+   417→          </div>
+   418→
+   419→          {/* ---- recalc footer ---- */}
+   420→          <Card className="border-[#EAD9A8] bg-gradient-to-br from-[#FFFDF5] to-[#FBF3DC] p-4">
+   421→            <div className="grid grid-cols-3 gap-2 text-center">
+   422→              <div>
+   423→                <div className="text-[11px] text-[#8A6508]">جمع اقلام</div>
+   424→                <div className="text-sm font-bold tabular-nums text-[#253A2A]">{fmtMoney(totals.subtotal)}</div>
+   425→              </div>
+   426→              <div>
+   427→                <div className="text-[11px] text-[#8A6508]">مالیات بر ارزش افزوده (۹٪)</div>
+   428→                <div className="text-sm font-bold tabular-nums text-[#253A2A]">{fmtMoney(totals.vat)}</div>
+   429→              </div>
+   430→              <div>
+   431→                <div className="text-[11px] text-[#8A6508]">جمع کل</div>
+   432→                <div className="text-sm font-extrabold tabular-nums text-[#3E6B4A]">{fmtMoney(totals.total)}</div>
+   433→              </div>
+   434→            </div>
+   435→            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[#EFE0B8] pt-3">
+   436→              <span
+   437→                className={cn(
+   438→                  'inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-bold',
+   439→                  smallDelta ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-300 bg-amber-50 text-amber-800'
+   440→                )}
+   441→              >
+   442→                {smallDelta
+   443→                  ? '✓ اختلاف جزئی قابل قبول'
+   444→                  : `اختلاف با سفارش اصلی: ${delta > 0 ? '+' : '−'}${fmtMoney(Math.abs(delta))}`}
+   445→              </span>
+   446→              <span className="text-[11px] text-[#8A9884]">مبدا مقایسه: جمع ثبت‌شده سفارش ({fmtMoney(order.total)})</span>
+   447→            </div>
+   448→            <PrimaryButton className="mt-3 min-h-[48px] w-full text-base" onClick={submit} disabled={saving}>
+   449→              {saving
+   450→                ? 'در حال ثبت…'
+   451→                : mode === 'receive'
+   452→                  ? 'ثبت دریافت تحویل'
+   453→                  : 'ثبت تایید نهایی انبار'}
+   454→            </PrimaryButton>
+   455→          </Card>
+   456→        </div>
+   457→      )}
+   458→    </Modal>
+   459→  )
+   460→}
+   461→
+   462→/* =============== scan-in bar (closes the printed → scanned loop) =============== */
+   463→
+   464→type ScanOutcome = { kind: 'ok' | 'warn' | 'err'; text: string }
+   465→
+   466→const SCAN_RECENT_KEY = 'hz_scan_recent'
+   467→
+   468→function readRecentCodes(): string[] {
+   469→  try {
+   470→    const raw = window.sessionStorage.getItem(SCAN_RECENT_KEY)
+   471→    const arr = raw ? JSON.parse(raw) : []
+   472→    return Array.isArray(arr) ? arr.filter((c) => typeof c === 'string').slice(0, 3) : []
+   473→  } catch {
+   474→    return []
+   475→  }
+   476→}
+   477→
+   478→function writeRecentCodes(codes: string[]) {
+   479→  try {
+   480→    window.sessionStorage.setItem(SCAN_RECENT_KEY, JSON.stringify(codes.slice(0, 3)))
+   481→  } catch {
+   482→    /* private mode etc. */
+   483→  }
+   484→}
+   485→
+   486→/**
+   487→ * Gold/olive scan bar at the top of Deliveries. Barcode scanners behave like
+   488→ * keyboards and send Enter after the code, so the input submits on Enter;
+   489→ * a gold button covers manual entry. Outcomes come from the parent's
+   490→ * `resolve` (match → open detail, order-without-delivery → hint, unknown →
+   491→ * error + shake). Keeps the last 3 resolved codes as re-open chips (persisted
+   492→ * in sessionStorage so the trail survives the detail open/close round-trip).
+   493→ */
+   494→function ScanBar({ resolve }: { resolve: (rawCode: string) => Promise<ScanOutcome> }) {
+   495→  const [value, setValue] = React.useState('')
+   496→  const [outcome, setOutcome] = React.useState<ScanOutcome | null>(null)
+   497→  const [looking, setLooking] = React.useState(false)
+   498→  const [shaking, setShaking] = React.useState(false)
+   499→  const [recent, setRecent] = React.useState<string[]>([])   // hydrated after mount (SSR-safe)
+   500→  const recentRef = React.useRef<string[]>([])               // mirror — survives unmount-timing races
+   501→  const inputRef = React.useRef<HTMLInputElement>(null)
+   502→  const hideTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+   503→  const shakeTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+   504→
+   505→  React.useEffect(() => {
+   506→    const saved = readRecentCodes()
+   507→    recentRef.current = saved
+   508→    setRecent(saved)
+   509→    return () => {
+   510→      if (hideTimer.current) clearTimeout(hideTimer.current)
+   511→      if (shakeTimer.current) clearTimeout(shakeTimer.current)
+   512→    }
+   513→  }, [])
+   514→
+   515→  /** record a resolved code — writes storage imperatively first, because a
+   516→   * successful resolve may unmount this bar in the same commit (detail opens)
+   517→   * and React discards pending updates (never running updater side-effects). */
+   518→  const addRecent = (code: string) => {
+   519→    const next = [code, ...recentRef.current.filter((c) => c !== code)].slice(0, 3)
+   520→    recentRef.current = next
+   521→    writeRecentCodes(next)
+   522→    setRecent(next)
+   523→  }
+   524→
+   525→  const submit = async (rawOverride?: string) => {
+   526→    if (looking) return
+   527→    const code = normalizeOrderCode(rawOverride ?? value)
+   528→    if (!code) return // empty input → ignore silently
+   529→    if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null }
+   530→    setOutcome(null)
+   531→    setLooking(true)
+   532→    try {
+   533→      const res = await resolve(code)
+   534→      setOutcome(res)
+   535→      if (res.kind === 'err') {
+   536→        // miss → shake + keep the input focused for the next scan
+   537→        setShaking(false)
+   538→        if (shakeTimer.current) clearTimeout(shakeTimer.current)
+   539→        shakeTimer.current = setTimeout(() => setShaking(false), 520)
+   540→        requestAnimationFrame(() => setShaking(true))
+   541→        inputRef.current?.focus()
+   542→      } else {
+   543→        addRecent(code)
+   544→        if (res.kind === 'warn') inputRef.current?.focus()
+   545→        if (res.kind === 'ok') {
+   546→          hideTimer.current = setTimeout(() => setOutcome(null), 6000)
+   547→        }
+   548→      }
+   549→    } finally {
+   550→      setLooking(false)
+   551→      setValue('')
+   552→    }
+   553→  }
+   554→
+   555→  return (
+   556→    <section
+   557→      aria-label="اسکن بارکد تحویل"
+   558→      className={cn(
+   559→        'relative mb-4 overflow-hidden rounded-2xl border border-[#EAD9A8] bg-gradient-to-l from-[#F3F7EF] via-[#FBF9F3] to-[#FFFDF5] p-4 shadow-[0_2px_14px_-4px_rgba(90,74,32,0.14)]',
+   560→        shaking && 'pz-shake'
+   561→      )}
+   562→    >
+   563→      {/* header: title + hint + example legend */}
+   564→      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+   565→        <div className="flex items-center gap-2.5">
+   566→          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#B8860B] to-[#DAA520] text-white shadow-md shadow-amber-700/20">
+   567→            <ScanLine size={20} />
+   568→          </span>
+   569→          <div>
+   570→            <div className="text-sm font-extrabold text-[#253A2A]">اسکن تحویل | Scan-in</div>
+   571→            <div className="text-[11px] text-[#8A9884]">بارکد حک‌شده روی چاپ سفارش را اسکن کنید</div>
+   572→          </div>
+   573→        </div>
+   574→        <Badge className="pz-barcode border-[#EAD9A8] bg-[#FFFDF5] text-[11px] text-[#8A6508]">مثال: HZ-1005</Badge>
+   575→      </div>
+   576→
+   577→      {/* input row: scanner line + icon + LTR mono input + submit button */}
+   578→      <div className="flex flex-col gap-2 sm:flex-row">
+   579→        <div
+   580→          className={cn(
+   581→            'relative flex-1 rounded-xl border border-[#E4DCC8] bg-white transition-all',
+   582→            'focus-within:border-[#DAA520] focus-within:shadow-[0_0_0_4px_rgba(218,165,32,0.16)]'
+   583→          )}
+   584→        >
+   585→          <span aria-hidden className="pz-scanline left-1.5" />
+   586→          <ScanLine size={18} className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-[#B8860B]/70" aria-hidden />
+   587→          <input
+   588→            ref={inputRef}
+   589→            value={value}
+   590→            onChange={(e) => setValue(e.target.value)}
+   591→            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void submit() } }}
+   592→            placeholder="کد سفارش را اسکن یا وارد کنید… | Scan order code"
+   593→            dir="ltr"
+   594→            aria-label="کد سفارش را اسکن یا وارد کنید"
+   595→            autoComplete="off"
+   596→            autoCapitalize="characters"
+   597→            spellCheck={false}
+   598→            className="h-12 min-h-[48px] w-full bg-transparent pl-12 pr-4 pz-barcode text-base font-bold tracking-widest text-[#253A2A] outline-none placeholder:font-sans placeholder:text-sm placeholder:font-normal placeholder:tracking-normal placeholder:text-[#A8A28C]"
+   599→          />
+   600→        </div>
+   601→        <GoldButton
+   602→          type="button"
+   603→          onClick={() => void submit()}
+   604→          disabled={looking}
+   605→          className="min-h-[48px] shrink-0 px-5"
+   606→        >
+   607→          {looking ? <Spinner /> : <ScanLine size={17} />} باز کردن
+   608→        </GoldButton>
+   609→      </div>
+   610→
+   611→      {/* outcome banners */}
+   612→      {outcome?.kind === 'ok' && (
+   613→        <div role="status" className="mt-2.5 flex items-center gap-2 rounded-xl border border-[#EAD9A8] bg-[#FFFDF5] px-3 py-2.5 text-sm font-bold text-[#8A6508]">
+   614→          <CheckCircle2 size={17} className="shrink-0" />
+   615→          <span>{outcome.text}</span>
+   616→        </div>
+   617→      )}
+   618→      {outcome?.kind === 'warn' && (
+   619→        <div role="status" className="mt-2.5 flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm font-bold text-amber-800">
+   620→          <AlertTriangle size={17} className="shrink-0" />
+   621→          <span>{outcome.text}</span>
+   622→        </div>
+   623→      )}
+   624→      {outcome?.kind === 'err' && (
+   625→        <div role="alert" className="mt-2.5 flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm font-bold text-rose-700">
+   626→          <XCircle size={17} className="shrink-0" />
+   627→          <span>{outcome.text}</span>
+   628→        </div>
+   629→      )}
+   630→
+   631→      {/* recently scanned trail (click = re-open) */}
+   632→      {recent.length > 0 && (
+   633→        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+   634→          <span className="text-[11px] font-semibold text-[#8A9884]">اسکن‌های اخیر:</span>
+   635→          {recent.map((c) => (
+   636→            <button
+   637→              key={c}
+   638→              type="button"
+   639→              onClick={() => void submit(c)}
+   640→              aria-label={`باز کردن مجدد ${c}`}
+   641→              className="pz-barcode inline-flex min-h-[44px] items-center rounded-full border border-[#E4DCC8] bg-white px-3 py-1 text-xs font-bold tracking-wider text-[#4A5A44] transition-all hover:border-[#DAA520] hover:bg-[#FFFDF5] hover:text-[#8A6508] active:scale-[0.97]"
+   642→            >
+   643→              {c}
+   644→            </button>
+   645→          ))}
+   646→        </div>
+   647→      )}
+   648→    </section>
+   649→  )
+   650→}
+   651→
+   652→/* =============== main section =============== */
+   653→
+   654→export default function DeliveriesSection({ user }: { user: PUser }) {
+   655→  const openOrder = useApp((s) => s.openOrder)
+   656→
+   657→  const hasReceive = hasRole(user, 'DELIVERY_RECEIVER') || hasRole(user, 'INVENTORY_SUPERVISOR')
+   658→  const hasConfirm = hasRole(user, 'INVENTORY_SUPERVISOR')
+   659→  const isManager = hasRole(user, 'GENERAL_MANAGER') || hasRole(user, 'OPERATION_MANAGER')
+   660→    || hasRole(user, 'ACCOUNTANT') || hasRole(user, 'PRODUCT_MANAGER')
+   661→
+   662→  const [tab, setTab] = React.useState<string>(() =>
+   663→    hasConfirm ? 'confirm' : hasRole(user, 'DELIVERY_RECEIVER') ? 'receive' : 'overview')
+   664→
+   665→  const [loading, setLoading] = React.useState(true)
+   666→  const [approved, setApproved] = React.useState<ListOrder[]>([])
+   667→  const [received, setReceived] = React.useState<ListOrder[]>([])
+   668→  const [confirmed, setConfirmed] = React.useState<ListOrder[]>([])
+   669→  const [done, setDone] = React.useState<ListOrder[]>([])
+   670→  const [holidays, setHolidays] = React.useState<Record<string, string>>({})
+   671→  const [sheet, setSheet] = React.useState<{ id: number; mode: SheetMode } | null>(null)
+   672→
+   673→  const load = React.useCallback(async () => {
+   674→    setLoading(true)
+   675→    try {
+   676→      const [a, r, c, d, h] = await Promise.all([
+   677→        api.get<{ orders: ListOrder[] }>('/api/orders?status=APPROVED'),
+   678→        api.get<{ orders: ListOrder[] }>('/api/orders?status=RECEIVED'),
+   679→        api.get<{ orders: ListOrder[] }>('/api/orders?status=CONFIRMED'),
+   680→        api.get<{ orders: ListOrder[] }>('/api/orders?status=DONE'),
+   681→        api.get<{ holidays: { date: string; title: string }[] }>('/api/holidays'),
+   682→      ])
+   683→      setApproved(a.orders)
+   684→      setReceived(r.orders)
+   685→      setConfirmed(c.orders)
+   686→      setDone(d.orders)
+   687→      setHolidays(Object.fromEntries(h.holidays.map((x) => [x.date, x.title])))
+   688→    } catch {
+   689→      toast.error('خطا در بارگذاری داده‌ها')
+   690→    } finally {
+   691→      setLoading(false)
+   692→    }
+   693→  }, [])
+   694→
+   695→  React.useEffect(() => { load() }, [load])
+   696→
+   697→  const closeSheet = React.useCallback(() => setSheet(null), [])
+   698→  const afterSheet = React.useCallback(() => { load() }, [load])
+   699→
+   700→  const today = todayISO()
+   701→  const todayHoliday = holidays[today]
+   702→
+   703→  const tabs = [
+   704→    ...(hasReceive ? [{ key: 'receive', label: 'دریافت تحویل', icon: <PackageCheck size={16} /> }] : []),
+   705→    ...(hasConfirm ? [{ key: 'confirm', label: 'تایید انبار', icon: <ClipboardCheck size={16} /> }] : []),
+   706→    ...(isManager ? [
+   707→      { key: 'overview', label: 'نمای کلی', icon: <LayoutGrid size={16} /> },
+   708→      { key: 'history', label: 'تاریخچه', icon: <History size={16} /> },
+   709→    ] : []),
+   710→  ]
+   711→
+   712→  const active = React.useMemo(
+   713→    () => [...approved, ...received, ...confirmed].sort((a, b) => (a.receivingDate < b.receivingDate ? -1 : 1)),
+   714→    [approved, received, confirmed]
+   715→  )
+   716→  const isOverdue = (o: ListOrder) => o.receivingDate.slice(0, 10) < today && o.status === 'APPROVED'
+   717→
+   718→  const openAction = (o: ListOrder) => {
+   719→    if (o.status === 'APPROVED' && hasReceive) setSheet({ id: o.id, mode: 'receive' })
+   720→    else if (o.status === 'RECEIVED' && hasConfirm) setSheet({ id: o.id, mode: 'confirm' })
+   721→    else openOrder(o.id)
+   722→  }
+   723→
+   724→  /* ---- scan-in resolution: printed Code39 (HZ-xxxx) → delivery detail ---- */
+   725→  const resolveScan = async (rawCode: string): Promise<ScanOutcome> => {
+   726→    const code = normalizeOrderCode(rawCode)
+   727→    if (!code) return { kind: 'warn', text: '' }
+   728→
+   729→    // 1) already-loaded delivery lists (fast path)
+   730→    const hit = [...approved, ...received, ...confirmed].find((o) => o.code === code)
+   731→    if (hit) {
+   732→      toast.success(`تحویل ${code} پیدا شد — باز شد ✓`)
+   733→      openAction(hit)
+   734→      return { kind: 'ok', text: `تحویل ${code} پیدا شد — باز شد ✓` }
+   735→    }
+   736→    const closed = done.find((o) => o.code === code)
+   737→    if (closed) {
+   738→      openOrder(closed.id)
+   739→      toast.info(`سفارش ${code} قبلاً تحویل داده شده و بسته شده — برای مشاهده باز شد`)
+   740→      return { kind: 'warn', text: `سفارش ${code} قبلاً تحویل داده شده و بسته شده — برای مشاهده باز شد` }
+   741→    }
+   742→
+   743→    // 2) fresh lookup (covers stale lists + orders that never reached the delivery stage)
+   744→    try {
+   745→      const res = await api.get<{ orders: ListOrder[] }>(`/api/orders?code=${encodeURIComponent(code)}`)
+   746→      const ord = res.orders?.[0]
+   747→      if (!ord) return { kind: 'err', text: `کد سفارش یافت نشد: ${code}` }
+   748→      if (ord.status === 'APPROVED' || ord.status === 'RECEIVED' || ord.status === 'CONFIRMED') {
+   749→        toast.success(`تحویل ${code} پیدا شد — باز شد ✓`)
+   750→        openAction(ord)
+   751→        return { kind: 'ok', text: `تحویل ${code} پیدا شد — باز شد ✓` }
+   752→      }
+   753→      if (ord.status === 'DONE') {
+   754→        openOrder(ord.id)
+   755→        toast.info(`سفارش ${code} قبلاً تحویل داده شده و بسته شده — برای مشاهده باز شد`)
+   756→        return { kind: 'warn', text: `سفارش ${code} قبلاً تحویل داده شده و بسته شده — برای مشاهده باز شد` }
+   757→      }
+   758→      if (ord.status === 'CANCELLED') {
+   759→        toast.info(`سفارش ${code} لغو شده است و تحویلی ندارد`)
+   760→        return { kind: 'warn', text: `سفارش ${code} لغو شده است و تحویلی ندارد` }
+   761→      }
+   762→      return { kind: 'warn', text: `سفارش ${code} هنوز تحویلی ثبت نشده` }
+   763→    } catch {
+   764→      return { kind: 'err', text: `خطا در بررسی کد — دوباره تلاش کنید: ${code}` }
+   765→    }
+   766→  }
+   767→
+   768→  return (
+   769→    <div>
+   770→      <SectionHeader
+   771→        title="دریافت و انبار | Deliveries"
+   772→        subtitle="تحویل سفارش‌های تامین‌کننده و تایید نهایی انبار"
+   773→        icon={<Truck size={20} />}
+   774→      />
+   775→
+   776→      {/* scan-in bar (closes the printed → scanned loop) */}
+   777→      {tabs.length > 0 && <ScanBar resolve={resolveScan} />}
+   778→
+   779→      {/* holiday banner */}
+   780→      {todayHoliday && (
+   781→        <div className="mb-4 flex items-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+   782→          <AlertTriangle size={18} className="shrink-0" />
+   783→          امروز تعطیل است: {todayHoliday}
+   784→        </div>
+   785→      )}
+   786→
+   787→      {tabs.length > 0 && <Tabs tabs={tabs} active={tab} onChange={setTab} />}
+   788→
+   789→      {loading ? (
+   790→        tab === 'history' ? (
+   791→          <TableWrap>
+   792→            <thead>
+   793→              <tr>
+   794→                <Th>کد سفارش</Th>
+   795→                <Th>تامین‌کننده</Th>
+   796→                <Th>مبلغ کل</Th>
+   797→                <Th>تاریخ بستن</Th>
+   798→                <Th className="text-left">عملیات</Th>
+   799→              </tr>
+   800→            </thead>
+   801→            <TableRowsSkeleton rows={6} cols={5} widths={['w-20', 'w-28', 'w-20', 'w-24', 'w-16']} />
+   802→          </TableWrap>
+   803→        ) : (
+   804→          <DeliveryGridSkeleton count={6} />
+   805→        )
+   806→      ) : tabs.length === 0 ? (
+   807→        <EmptyState title="دسترسی‌ای برای این بخش ندارید" hint="این بخش برای گیرندگان تحویل، انباردار و مدیران است." />
+   808→      ) : (
+   809→        <>
+   810→          {/* ================= RECEIVE TAB ================= */}
+   811→          {tab === 'receive' && (
+   812→            <div className="space-y-3">
+   813→              {confirmed.length > 0 && (
+   814→                <div className="rounded-2xl border border-[#EAD9A8] bg-[#FFFDF5] px-4 py-3 text-sm font-semibold text-[#8A6508]">
+   815→                  {toFaDigits(confirmed.length)} سفارش تایید نهایی شده و آماده حسابداری است ✓
+   816→                </div>
+   817→              )}
+   818→              {approved.length === 0 ? (
+   819→                <EmptyState icon={<PackageCheck size={40} />} title="سفارشی برای دریافت تحویل نیست" hint="سفارش‌های تاییدشده مدیر اینجا نمایش داده می‌شوند." />
+   820→              ) : (
+   821→                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+   822→                  {[...approved].sort((a, b) => (a.receivingDate < b.receivingDate ? -1 : 1)).map((o) => (
+   823→                    <Card key={o.id} className={cn('p-4', isOverdue(o) && 'border-rose-300 bg-rose-50/50')}>
+   824→                      <div className="flex items-start justify-between gap-2">
+   825→                        <div className="min-w-0">
+   826→                          <div className="text-base font-extrabold text-[#253A2A]">{o.code}</div>
+   827→                          <div className="truncate text-xs text-[#6B7A66]">{o.supplier?.name ?? '—'}</div>
+   828→                        </div>
+   829→                        <StatusBadge status={o.status} />
+   830→                      </div>
+   831→                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#6B7A66]">
+   832→                        <span>تحویل: <b>{fmtJalali(o.receivingDate)}</b></span>
+   833→                        <span>{toFaDigits(o._count?.items ?? 0)} قلم</span>
+   834→                        <Money value={o.total} className="text-xs" />
+   835→                      </div>
+   836→                      {isOverdue(o) && (
+   837→                        <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-bold text-rose-700">
+   838→                          <div className="flex items-center gap-1.5"><AlertTriangle size={14} /> سفارش معوق — به تامین‌کننده پیگیری شود</div>
+   839→                        </div>
+   840→                      )}
+   841→                      <PrimaryButton className="mt-3 min-h-[44px] w-full" onClick={() => setSheet({ id: o.id, mode: 'receive' })}>
+   842→                        دریافت تحویل
+   843→                      </PrimaryButton>
+   844→                    </Card>
+   845→                  ))}
+   846→                </div>
+   847→              )}
+   848→            </div>
+   849→          )}
+   850→
+   851→          {/* ================= CONFIRM TAB ================= */}
+   852→          {tab === 'confirm' && (
+   853→            <div className="space-y-3">
+   854→              {received.length === 0 ? (
+   855→                <EmptyState icon={<ClipboardCheck size={40} />} title="سفارش دریافتی در انتظار تایید نیست" hint="سفارش‌هایی که گیرنده تحویل ثبت کرده اینجا برای تایید نهایی می‌آیند." />
+   856→              ) : (
+   857→                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+   858→                  {received.map((o) => (
+   859→                    <Card key={o.id} className="p-4">
+   860→                      <div className="flex items-start justify-between gap-2">
+   861→                        <div className="min-w-0">
+   862→                          <div className="text-base font-extrabold text-[#253A2A]">{o.code}</div>
+   863→                          <div className="truncate text-xs text-[#6B7A66]">{o.supplier?.name ?? '—'}</div>
+   864→                        </div>
+   865→                        <StatusBadge status={o.status} />
+   866→                      </div>
+   867→                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#6B7A66]">
+   868→                        <span>تحویل: <b>{fmtJalali(o.receivingDate)}</b></span>
+   869→                        <span>{toFaDigits(o._count?.items ?? 0)} قلم</span>
+   870→                        <Money value={o.total} className="text-xs" />
+   871→                      </div>
+   872→                      <PrimaryButton className="mt-3 min-h-[44px] w-full" onClick={() => setSheet({ id: o.id, mode: 'confirm' })}>
+   873→                        تایید نهایی انبار
+   874→                      </PrimaryButton>
+   875→                    </Card>
+   876→                  ))}
+   877→                </div>
+   878→              )}
+   879→            </div>
+   880→          )}
+   881→
+   882→          {/* ================= OVERVIEW TAB ================= */}
+   883→          {tab === 'overview' && (
+   884→            <div className="space-y-4">
+   885→              <div className="grid gap-3 sm:grid-cols-3">
+   886→                <StatCard label="در انتظار دریافت" value={toFaDigits(approved.length)} sub="سفارش تاییدشده" icon={<Truck size={20} />} tone="gold" />
+   887→                <StatCard label="دریافت‌شده" value={toFaDigits(received.length)} sub="منتظر تایید انبار" icon={<PackageCheck size={20} />} tone="olive" />
+   888→                <StatCard label="آماده حسابداری" value={toFaDigits(confirmed.length)} sub="تایید نهایی شده" icon={<ClipboardCheck size={20} />} tone="sky" />
+   889→              </div>
+   890→              {active.length === 0 ? (
+   891→                <EmptyState icon={<LayoutGrid size={40} />} title="سفارش فعالی وجود ندارد" />
+   892→              ) : (
+   893→                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+   894→                  {active.map((o) => {
+   895→                    const overdue = isOverdue(o)
+   896→                    return (
+   897→                      <Card key={o.id} className={cn('p-4', overdue && 'border-rose-300 bg-rose-50/50')}>
+   898→                        <div className="flex items-start justify-between gap-2">
+   899→                          <div className="min-w-0">
+   900→                            <div className="text-base font-extrabold text-[#253A2A]">{o.code}</div>
+   901→                            <div className="truncate text-xs text-[#6B7A66]">{o.supplier?.name ?? '—'}</div>
+   902→                          </div>
+   903→                          <StatusBadge status={o.status} />
+   904→                        </div>
+   905→                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#6B7A66]">
+   906→                          <span>تحویل: <b>{fmtJalali(o.receivingDate)}</b></span>
+   907→                          <span>{toFaDigits(o._count?.items ?? 0)} قلم</span>
+   908→                          <Money value={o.total} className="text-xs" />
+   909→                        </div>
+   910→                        {overdue && (
+   911→                          <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3">
+   912→                            <div className="flex items-center gap-1.5 text-xs font-bold text-rose-700">
+   913→                              <AlertTriangle size={14} /> سفارش معوق — به تامین‌کننده پیگیری شود
+   914→                            </div>
+   915→                            <GhostButton className="mt-2 min-h-[44px] w-full" onClick={() => openOrder(o.id)}>
+   916→                              <Eye size={15} /> مشاهده جزئیات سفارش
+   917→                            </GhostButton>
+   918→                          </div>
+   919→                        )}
+   920→                        {!overdue && (
+   921→                          <GhostButton className="mt-3 min-h-[44px] w-full" onClick={() => openAction(o)}>
+   922→                            {o.status === 'APPROVED' && hasReceive ? 'دریافت تحویل'
+   923→                              : o.status === 'RECEIVED' && hasConfirm ? 'تایید انبار'
+   924→                                : <><Eye size={15} /> مشاهده سفارش</>}
+   925→                          </GhostButton>
+   926→                        )}
+   927→                      </Card>
+   928→                    )
+   929→                  })}
+   930→                </div>
+   931→              )}
+   932→            </div>
+   933→          )}
+   934→
+   935→          {/* ================= HISTORY TAB ================= */}
+   936→          {tab === 'history' && (
+   937→            done.length === 0 ? (
+   938→              <EmptyState icon={<History size={40} />} title="تاریخچه خالی است" hint="سفارش‌های بسته‌شده در حسابداری اینجا نمایش داده می‌شوند." />
+   939→            ) : (
+   940→              <div className="max-h-[70vh] overflow-y-auto pz-scroll">
+   941→                <TableWrap>
+   942→                  <thead>
+   943→                    <tr>
+   944→                      <Th>کد سفارش</Th>
+   945→                      <Th>تامین‌کننده</Th>
+   946→                      <Th>مبلغ کل</Th>
+   947→                      <Th>تاریخ بستن</Th>
+   948→                      <Th className="text-left">عملیات</Th>
+   949→                    </tr>
+   950→                  </thead>
+   951→                  <tbody>
+   952→                    {done.map((o) => (
+   953→                      <tr key={o.id} className="transition hover:bg-[#FBF9F3]">
+   954→                        <Td className="font-bold">{o.code}</Td>
+   955→                        <Td>{o.supplier?.name ?? '—'}</Td>
+   956→                        <Td><Money value={o.total} className="text-xs font-semibold" /></Td>
+   957→                        <Td className="text-xs">{fmtJalaliTime(o.doneAt)}</Td>
+   958→                        <Td className="text-left">
+   959→                          <GhostButton className="min-h-[44px]" onClick={() => openOrder(o.id)}>
+   960→                            <Eye size={15} /> مشاهده
+   961→                          </GhostButton>
+   962→                        </Td>
+   963→                      </tr>
+   964→                    ))}
+   965→                  </tbody>
+   966→                </TableWrap>
+   967→              </div>
+   968→            )
+   969→          )}
+   970→        </>
+   971→      )}
+   972→
+   973→      {/* sheet (receive / confirm) */}
+   974→      <DeliverySheet
+   975→        orderId={sheet?.id ?? null}
+   976→        mode={sheet?.mode ?? 'receive'}
+   977→        user={user}
+   978→        onClose={closeSheet}
+   979→        onDone={afterSheet}
+   980→      />
+   981→    </div>
+   982→  )
+   983→}
+   984→

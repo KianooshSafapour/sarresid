@@ -1,0 +1,599 @@
+     1→'use client'
+     2→import * as React from 'react'
+     3→import { toast } from 'sonner'
+     4→import { Truck, Pencil, Plus, ChevronLeft, Phone, Package, Boxes, Building2, ArrowRight, Search, History, FileSpreadsheet } from 'lucide-react'
+     5→import { api, downloadFile } from '@/lib/api'
+     6→import { isoToJalali, toFaDigits } from '@/lib/jalali'
+     7→import { hasRole, type PUser, type SupplierT, type PriceImportInfo } from '@/lib/types'
+     8→import {
+     9→  Card, SectionHeader, Badge, StockBadge, stockDot, Field, inputCls, PrimaryButton, GoldButton,
+    10→  GhostButton, EmptyState, Loading, Modal, Money, ProductImage, Spinner, TimeAgo,
+    11→} from './kit'
+    12→
+    13→/* ---------- local types ---------- */
+    14→type CompanyMini = { id: number; name: string }
+    15→type CompanyProduct = { id: number; name: string; stock: number; minStock: number; sellPrice: number; imageUrl: string | null; active: boolean }
+    16→type CompanyRow = {
+    17→  id: number
+    18→  name: string
+    19→  note?: string | null
+    20→  products: CompanyProduct[]
+    21→  suppliers?: { supplier: { id: number; name: string } }[]
+    22→}
+    23→type SupplierRow = SupplierT & {
+    24→  companies?: { company: CompanyMini }[]
+    25→  _count?: { products: number }
+    26→}
+    27→
+    28→const KIND_META: Record<string, { label: string; cls: string }> = {
+    29→  MANUFACTURER: { label: 'تولیدکننده', cls: 'border-[#C8D8C0] bg-[#F3F7EF] text-[#3E6B4A]' },
+    30→  DISTRIBUTOR: { label: 'پخش', cls: 'border-[#EAD9A8] bg-[#FBF3DC] text-[#8A6508]' },
+    31→  BOTH: { label: 'هردو', cls: 'border-[#D9C9A8] bg-[#F5EFE0] text-[#6B5B2A]' },
+    32→}
+    33→const PAY_LABEL: Record<string, string> = { CASH: 'نقدی', CHEQUE: 'چک', MIXED: 'مختلط' }
+    34→const PAY_CLS: Record<string, string> = {
+    35→  CASH: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    36→  CHEQUE: 'border-amber-200 bg-amber-50 text-amber-700',
+    37→  MIXED: 'border-stone-200 bg-stone-100 text-stone-600',
+    38→}
+    39→
+    40→function KindBadge({ kind }: { kind: string }) {
+    41→  const m = KIND_META[kind] ?? { label: kind, cls: 'border-stone-200 bg-stone-100 text-stone-600' }
+    42→  return <Badge className={m.cls}>{m.label}</Badge>
+    43→}
+    44→
+    45→function PayChip({ terms, chequeDays }: { terms: string; chequeDays: number }) {
+    46→  return (
+    47→    <Badge className={PAY_CLS[terms] ?? PAY_CLS.MIXED}>
+    48→      {PAY_LABEL[terms] ?? terms}
+    49→      {terms !== 'CASH' && chequeDays > 0 ? ` · ${toFaDigits(chequeDays)} روزه` : ''}
+    50→    </Badge>
+    51→  )
+    52→}
+    53→
+    54→function CompanyChip({ name }: { name: string }) {
+    55→  return (
+    56→    <span className="inline-flex max-w-36 items-center gap-1.5 rounded-full border border-[#E4DCC8] bg-white py-0.5 pl-2.5 pr-0.5 text-xs font-medium text-[#4A5A44]">
+    57→      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#3E6B4A] to-[#5F8F55] text-[10px] font-bold text-white" title={name}>
+    58→        {name.trim().charAt(0).toUpperCase()}
+    59→      </span>
+    60→      <span className="truncate">{name}</span>
+    61→    </span>
+    62→  )
+    63→}
+    64→
+    65→function Crumb({ label, onClick, active }: { label: string; onClick?: () => void; active?: boolean }) {
+    66→  return (
+    67→    <button
+    68→      type="button"
+    69→      onClick={onClick}
+    70→      disabled={active}
+    71→      className={`rounded-lg px-2 py-1 text-sm font-semibold transition ${active ? 'cursor-default text-[#253A2A]' : 'text-[#5F8F55] hover:bg-[#F3F7EF]'}`}
+    72→    >
+    73→      {label}
+    74→    </button>
+    75→  )
+    76→}
+    77→
+    78→/** product mini-card — same look as ProductsSection (stock number at the bottom, colored) */
+    79→function ProductMiniCard({ p }: { p: CompanyProduct }) {
+    80→  return (
+    81→    <Card className={`flex flex-col gap-2 p-3 ${p.active ? '' : 'opacity-60'}`}>
+    82→      <div className="flex items-start justify-between gap-2">
+    83→        <ProductImage src={p.imageUrl} name={p.name} size={44} />
+    84→        <StockBadge stock={p.stock} minStock={p.minStock} />
+    85→      </div>
+    86→      <div className="truncate text-xs font-bold text-[#253A2A]" title={p.name}>{p.name}</div>
+    87→      <Money value={p.sellPrice} className="text-xs font-bold text-[#8A6508]" />
+    88→      <div className="mt-auto flex items-end justify-between border-t border-[#EFEAD8] pt-1.5">
+    89→        <span className={`text-2xl font-black leading-none tabular-nums ${stockDot(p.stock, p.minStock)}`}>
+    90→          {toFaDigits(Math.floor(p.stock))}
+    91→        </span>
+    92→        <span className="text-[10px] font-medium text-[#8A9884]">موجودی</span>
+    93→      </div>
+    94→    </Card>
+    95→  )
+    96→}
+    97→
+    98→export default function SuppliersSection({ user }: { user: PUser }) {
+    99→  const manage =
+   100→    hasRole(user, 'GENERAL_MANAGER') || hasRole(user, 'PRODUCT_MANAGER') ||
+   101→    hasRole(user, 'OPERATION_MANAGER') || hasRole(user, 'IT_ADMIN')
+   102→  // price-list XLS export — same gate as the API (plus PRODUCT_MANAGER)
+   103→  const canExportPrices =
+   104→    hasRole(user, 'ACCOUNTANT') || hasRole(user, 'GENERAL_MANAGER') ||
+   105→    hasRole(user, 'OWNER') || hasRole(user, 'IT_ADMIN') || hasRole(user, 'PRODUCT_MANAGER')
+   106→
+   107→  const [suppliers, setSuppliers] = React.useState<SupplierRow[]>([])
+   108→  const [companies, setCompanies] = React.useState<CompanyRow[]>([])
+   109→  const [priceImport, setPriceImport] = React.useState<PriceImportInfo | null>(null)
+   110→  const [loading, setLoading] = React.useState(true)
+   111→  const [search, setSearch] = React.useState('')
+   112→
+   113→  /* drill-down: list → supplier → company */
+   114→  const [openSupplier, setOpenSupplier] = React.useState<SupplierRow | null>(null)
+   115→  const [openCompany, setOpenCompany] = React.useState<CompanyRow | null>(null)
+   116→
+   117→  const load = React.useCallback(async () => {
+   118→    setLoading(true)
+   119→    try {
+   120→      const [s, c] = await Promise.all([
+   121→        api.get<{ suppliers: SupplierRow[]; priceImport?: PriceImportInfo | null }>('/api/suppliers'),
+   122→        api.get<{ companies: CompanyRow[] }>('/api/companies'),
+   123→      ])
+   124→      setSuppliers(s.suppliers ?? [])
+   125→      setPriceImport(s.priceImport ?? null)
+   126→      setCompanies(c.companies ?? [])
+   127→    } catch (e) {
+   128→      toast.error(e instanceof Error ? e.message : 'خطا در دریافت تامین‌کنندگان')
+   129→    } finally {
+   130→      setLoading(false)
+   131→    }
+   132→  }, [])
+   133→
+   134→  React.useEffect(() => { void load() }, [load])
+   135→
+   136→  /* ---------- supplier modal ---------- */
+   137→  const [supOpen, setSupOpen] = React.useState(false)
+   138→  const [editingSup, setEditingSup] = React.useState<SupplierRow | null>(null)
+   139→  const [supForm, setSupForm] = React.useState({
+   140→    name: '', kind: 'DISTRIBUTOR', phone: '',
+   141→    paymentTerms: 'CASH', chequeDays: '30', note: '', companyIds: [] as number[],
+   142→  })
+   143→  const [savingSup, setSavingSup] = React.useState(false)
+   144→
+   145→  const openSupplierModal = (s: SupplierRow | null) => {
+   146→    setEditingSup(s)
+   147→    setSupForm({
+   148→      name: s?.name ?? '',
+   149→      kind: s?.kind ?? 'DISTRIBUTOR',
+   150→      phone: s?.phone ?? '',
+   151→      paymentTerms: s?.paymentTerms ?? 'CASH',
+   152→      chequeDays: String(s?.chequeDays ?? 30),
+   153→      note: s?.note ?? '',
+   154→      companyIds: (s?.companies ?? []).map((c) => c.company.id),
+   155→    })
+   156→    setSupOpen(true)
+   157→  }
+   158→
+   159→  const toggleCompany = (id: number) =>
+   160→    setSupForm((f) => ({
+   161→      ...f,
+   162→      companyIds: f.companyIds.includes(id) ? f.companyIds.filter((x) => x !== id) : [...f.companyIds, id],
+   163→    }))
+   164→
+   165→  const saveSupplier = async () => {
+   166→    if (!supForm.name.trim()) { toast.error('نام تامین‌کننده الزامی است'); return }
+   167→    setSavingSup(true)
+   168→    try {
+   169→      const payload = {
+   170→        name: supForm.name.trim(),
+   171→        kind: supForm.kind,
+   172→        phone: supForm.phone.trim() || null,
+   173→        note: supForm.note.trim() || null,
+   174→        paymentTerms: supForm.paymentTerms,
+   175→        chequeDays: Number(supForm.chequeDays) || 0,
+   176→        companyIds: supForm.companyIds,
+   177→        userId: user.id,
+   178→        userName: user.name,
+   179→      }
+   180→      if (editingSup?.id) {
+   181→        await api.patch('/api/suppliers', { id: editingSup.id, ...payload })
+   182→        toast.success('تامین‌کننده بروزرسانی شد')
+   183→      } else {
+   184→        await api.post('/api/suppliers', payload)
+   185→        toast.success('تامین‌کننده جدید ثبت شد')
+   186→      }
+   187→      setSupOpen(false)
+   188→      void load()
+   189→    } catch (e) {
+   190→      toast.error(e instanceof Error ? e.message : 'خطا در ذخیره تامین‌کننده')
+   191→    } finally {
+   192→      setSavingSup(false)
+   193→    }
+   194→  }
+   195→
+   196→  /* ---------- company modal ---------- */
+   197→  const [comOpen, setComOpen] = React.useState(false)
+   198→  const [comName, setComName] = React.useState('')
+   199→  const [savingCom, setSavingCom] = React.useState(false)
+   200→
+   201→  const saveCompany = async () => {
+   202→    if (!comName.trim()) { toast.error('نام شرکت الزامی است'); return }
+   203→    setSavingCom(true)
+   204→    try {
+   205→      await api.post('/api/companies', { name: comName.trim(), userId: user.id, userName: user.name })
+   206→      toast.success('شرکت جدید ثبت شد')
+   207→      setComOpen(false)
+   208→      setComName('')
+   209→      void load()
+   210→    } catch (e) {
+   211→      toast.error(e instanceof Error ? e.message : 'خطا در ثبت شرکت')
+   212→    } finally {
+   213→      setSavingCom(false)
+   214→    }
+   215→  }
+   216→
+   217→  /* ---------- derived ---------- */
+   218→  const PRICE_STALE_MS = 30 * 24 * 3600 * 1000
+   219→  const priceStale = !priceImport || (Date.now() - new Date(priceImport.at).getTime()) > PRICE_STALE_MS
+   220→
+   221→  /* ---------- per-supplier price-list export (gold, round-trips with the import) ---------- */
+   222→  const [exportingId, setExportingId] = React.useState<number | null>(null)
+   223→  const exportPriceList = React.useCallback(async (s: SupplierRow) => {
+   224→    setExportingId(s.id)
+   225→    try {
+   226→      const j = isoToJalali(new Date())
+   227→      const slug = s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/g, '') || `supplier-${s.id}`
+   228→      await downloadFile(`/api/export/price-list?supplierId=${s.id}&userId=${user.id}`, `price-list-${slug}-${j.jy}-${j.jm}.xls`)
+   229→      toast.success(`فهرست قیمت ${s.name} دانلود شد ✓`)
+   230→    } catch (e) {
+   231→      toast.error(e instanceof Error && e.message !== 'Download failed' ? e.message : 'خطا در دریافت فهرست قیمت')
+   232→    } finally {
+   233→      setExportingId(null)
+   234→    }
+   235→  }, [user.id])
+   236→
+   237→  /* ---------- bulk workbook: one sheet per supplier (accountant month-end pack) ---------- */
+   238→  const [exportingAll, setExportingAll] = React.useState(false)
+   239→  const exportAllPriceLists = React.useCallback(async () => {
+   240→    setExportingAll(true)
+   241→    try {
+   242→      const j = isoToJalali(new Date())
+   243→      await downloadFile(`/api/export/price-list?all=1&userId=${user.id}`, `price-lists-all-${j.jy}-${j.jm}.xls`)
+   244→      toast.success('همه فهرست‌ها دانلود شد ✓')
+   245→    } catch (e) {
+   246→      toast.error(e instanceof Error && e.message !== 'Download failed' ? e.message : 'خطا در دریافت فهرست‌های قیمت')
+   247→    } finally {
+   248→      setExportingAll(false)
+   249→    }
+   250→  }, [user.id])
+   251→
+   252→  const q = search.trim().toLowerCase()
+   253→  const filteredSuppliers = q
+   254→    ? suppliers.filter((s) => s.name.toLowerCase().includes(q) || (s.companies ?? []).some((c) => c.company.name.toLowerCase().includes(q)))
+   255→    : suppliers
+   256→
+   257→  const supplierCompanies = openSupplier
+   258→    ? (openSupplier.companies ?? []).map((c) => companies.find((x) => x.id === c.company.id)).filter((x): x is CompanyRow => !!x)
+   259→    : []
+   260→
+   261→  /* ---------- render: company products ---------- */
+   262→  if (openSupplier && openCompany) {
+   263→    const lowCount = openCompany.products.filter((p) => p.stock <= p.minStock).length
+   264→    return (
+   265→      <div>
+   266→        <SectionHeader
+   267→          title={openCompany.name}
+   268→          subtitle={`محصولات شرکت ${openCompany.name} — ${toFaDigits(openCompany.products.length)} کالا${lowCount ? ` · ${toFaDigits(lowCount)} کمبود` : ''}`}
+   269→          icon={<Boxes className="h-5 w-5" />}
+   270→          actions={
+   271→            <GhostButton onClick={() => setOpenCompany(null)} className="min-h-[44px]">
+   272→              <ArrowRight className="h-4 w-4" /> بازگشت به {openSupplier.name}
+   273→            </GhostButton>
+   274→          }
+   275→        />
+   276→        <div className="mb-4 flex flex-wrap items-center gap-1 rounded-xl border border-[#E4DCC8] bg-white/80 px-2 py-1.5">
+   277→          <Crumb label="همه تامین‌کنندگان" onClick={() => { setOpenSupplier(null); setOpenCompany(null) }} />
+   278→          <ChevronLeft className="h-4 w-4 text-[#B8B29A]" />
+   279→          <Crumb label={openSupplier.name} onClick={() => setOpenCompany(null)} />
+   280→          <ChevronLeft className="h-4 w-4 text-[#B8B29A]" />
+   281→          <Crumb label={openCompany.name} active />
+   282→        </div>
+   283→        {openCompany.products.length === 0 ? (
+   284→          <EmptyState icon={<Boxes className="h-10 w-10" />} title="این شرکت هنوز کالایی ندارد" />
+   285→        ) : (
+   286→          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4">
+   287→            {openCompany.products.map((p) => <ProductMiniCard key={p.id} p={p} />)}
+   288→          </div>
+   289→        )}
+   290→      </div>
+   291→    )
+   292→  }
+   293→
+   294→  /* ---------- render: supplier companies ---------- */
+   295→  if (openSupplier) {
+   296→    return (
+   297→      <div>
+   298→        <SectionHeader
+   299→          title={openSupplier.name}
+   300→          subtitle="برای دیدن محصولات، شرکت را انتخاب کنید"
+   301→          icon={<Truck className="h-5 w-5" />}
+   302→          actions={
+   303→            <div className="flex gap-2">
+   304→              {manage && (
+   305→                <GhostButton onClick={() => openSupplierModal(openSupplier)} className="min-h-[44px]">
+   306→                  <Pencil className="h-4 w-4" /> ویرایش تامین‌کننده
+   307→                </GhostButton>
+   308→              )}
+   309→              <GhostButton onClick={() => setOpenSupplier(null)} className="min-h-[44px]">
+   310→                <ArrowRight className="h-4 w-4" /> همه تامین‌کنندگان
+   311→              </GhostButton>
+   312→            </div>
+   313→          }
+   314→        />
+   315→        <div className="mb-4 flex flex-wrap items-center gap-1 rounded-xl border border-[#E4DCC8] bg-white/80 px-2 py-1.5">
+   316→          <Crumb label="همه تامین‌کنندگان" onClick={() => setOpenSupplier(null)} />
+   317→          <ChevronLeft className="h-4 w-4 text-[#B8B29A]" />
+   318→          <Crumb label={openSupplier.name} active />
+   319→        </div>
+   320→        {supplierCompanies.length === 0 ? (
+   321→          <EmptyState icon={<Building2 className="h-10 w-10" />} title="شرکتی به این تامین‌کننده متصل نیست" hint="از دکمه ویرایش تامین‌کننده می‌توانید شرکت‌ها را متصل کنید." />
+   322→        ) : (
+   323→          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+   324→            {supplierCompanies.map((c) => {
+   325→              const low = c.products.filter((p) => p.stock <= p.minStock).length
+   326→              return (
+   327→                <Card
+   328→                  key={c.id}
+   329→                  onClick={() => setOpenCompany(c)}
+   330→                  className="flex cursor-pointer items-center gap-3 p-4 transition hover:-translate-y-0.5 hover:border-[#5F8F55] hover:shadow-lg"
+   331→                >
+   332→                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#3E6B4A] to-[#5F8F55] text-lg font-bold text-white" title={c.name}>
+   333→                    {c.name.trim().charAt(0).toUpperCase()}
+   334→                  </span>
+   335→                  <div className="min-w-0 flex-1">
+   336→                    <div className="truncate text-sm font-bold text-[#253A2A]">{c.name}</div>
+   337→                    <div className="mt-0.5 flex flex-wrap gap-1.5 text-[11px]">
+   338→                      <Badge className="border-[#E4DCC8] bg-white text-[#4A5A44]">{toFaDigits(c.products.length)} محصول</Badge>
+   339→                      {low > 0 && <Badge className="border-amber-200 bg-amber-50 text-amber-700">{toFaDigits(low)} کمبود</Badge>}
+   340→                    </div>
+   341→                  </div>
+   342→                  <ChevronLeft className="h-5 w-5 shrink-0 text-[#B8B29A]" />
+   343→                </Card>
+   344→              )
+   345→            })}
+   346→          </div>
+   347→        )}
+   348→      </div>
+   349→    )
+   350→  }
+   351→
+   352→  /* ---------- render: list ---------- */
+   353→  return (
+   354→    <div>
+   355→      <SectionHeader
+   356→        title="تامین‌کنندگان | Suppliers"
+   357→        subtitle="تولیدی‌ها و پخش‌ها، شرکت‌ها و محصولات هرکدام"
+   358→        icon={<Truck className="h-5 w-5" />}
+   359→        actions={
+   360→          manage ? (
+   361→            <>
+   362→              <GhostButton onClick={() => setComOpen(true)} className="min-h-[44px]">
+   363→                <Plus className="h-4 w-4" /> شرکت جدید
+   364→              </GhostButton>
+   365→              <PrimaryButton onClick={() => openSupplierModal(null)} className="min-h-[44px]">
+   366→                <Plus className="h-4 w-4" /> تامین‌کننده جدید
+   367→              </PrimaryButton>
+   368→            </>
+   369→          ) : undefined
+   370→        }
+   371→      />
+   372→
+   373→      {/* price-list recency chip — amber when the last price import is older than 30 days (or never) +
+   374→          bulk workbook export (one sheet per supplier) beside it; flex-wrap keeps 390px free of h-scroll */}
+   375→      {!loading && (
+   376→        <div className="mb-4 flex flex-wrap items-center gap-2" data-price-recency data-price-stale={priceStale ? '1' : '0'}>
+   377→          <Badge
+   378→            className={priceStale
+   379→              ? 'border-amber-300 bg-amber-50 px-3 py-1.5 text-amber-800'
+   380→              : 'border-[#C8D8C0] bg-[#F3F7EF] px-3 py-1.5 text-[#3E6B4A]'}
+   381→          >
+   382→            <History className="h-3.5 w-3.5 shrink-0" />
+   383→            <span className="font-semibold">
+   384→              فهرست قیمت‌ها: {priceImport ? (
+   385→                <>آخرین ورود <TimeAgo iso={priceImport.at} /> — {priceImport.by}</>
+   386→              ) : (
+   387→                'تاکنون وارد نشده'
+   388→              )}
+   389→            </span>
+   390→            {priceStale && (
+   391→              <span className="font-bold">— ورود فهرست قیمت | Import price list</span>
+   392→            )}
+   393→          </Badge>
+   394→          {canExportPrices && (
+   395→            <button
+   396→              type="button"
+   397→              onClick={() => void exportAllPriceLists()}
+   398→              disabled={exportingAll}
+   399→              className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-[#EAD9A8] bg-[#FBF6E8] px-3.5 py-2 text-xs font-bold text-[#8A6508] transition hover:bg-[#F5EDD3] disabled:cursor-not-allowed disabled:opacity-50"
+   400→              title="دانلود فهرست قیمت همه تأمین‌کنندگان در یک فایل اکسل — هر تأمین‌کننده یک برگه"
+   401→              aria-label="دانلود همه فهرست‌های قیمت"
+   402→              data-price-list-export-all
+   403→            >
+   404→              {exportingAll ? <Spinner className="h-4 w-4" /> : <FileSpreadsheet className="h-4 w-4" />}
+   405→              همه فهرست‌های قیمت (اکسل)
+   406→            </button>
+   407→          )}
+   408→        </div>
+   409→      )}
+   410→
+   411→      <div className="relative mb-4">
+   412→        <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#A8A28C]" />
+   413→        <input
+   414→          value={search}
+   415→          onChange={(e) => setSearch(e.target.value)}
+   416→          placeholder="جستجوی تامین‌کننده یا شرکت…"
+   417→          className={`${inputCls} min-h-[44px] pr-9`}
+   418→          aria-label="جستجوی تامین‌کننده"
+   419→        />
+   420→      </div>
+   421→
+   422→      {loading ? (
+   423→        <Loading label="در حال دریافت تامین‌کنندگان…" />
+   424→      ) : filteredSuppliers.length === 0 ? (
+   425→        <EmptyState icon={<Truck className="h-10 w-10" />} title="تامین‌کننده‌ای پیدا نشد" />
+   426→      ) : (
+   427→        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+   428→          {filteredSuppliers.map((s) => {
+   429→            const lastImport = s.lastPriceImport ?? null
+   430→            const importStale = !lastImport || (Date.now() - new Date(lastImport.at).getTime()) > PRICE_STALE_MS
+   431→            return (
+   432→            <Card key={s.id} className="flex flex-col p-5">
+   433→              <div className="flex items-start justify-between gap-2">
+   434→                <button type="button" onClick={() => setOpenSupplier(s)} className="min-w-0 flex-1 text-right">
+   435→                  <div className="truncate text-base font-bold text-[#253A2A]" title={s.name}>{s.name}</div>
+   436→                  <div className="mt-2 flex flex-wrap gap-1.5">
+   437→                    <KindBadge kind={s.kind} />
+   438→                    <PayChip terms={s.paymentTerms} chequeDays={s.chequeDays} />
+   439→                  </div>
+   440→                </button>
+   441→                {manage && (
+   442→                  <button
+   443→                    type="button"
+   444→                    onClick={() => openSupplierModal(s)}
+   445→                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#E4DCC8] bg-white text-[#4A5A44] transition hover:border-[#5F8F55] hover:text-[#3E6B4A]"
+   446→                    title="ویرایش"
+   447→                    aria-label={`ویرایش ${s.name}`}
+   448→                  >
+   449→                    <Pencil className="h-4 w-4" />
+   450→                  </button>
+   451→                )}
+   452→              </div>
+   453→
+   454→              {s.phone && (
+   455→                <div className="mt-3 flex items-center gap-2 text-xs text-[#4A5A44]" dir="ltr">
+   456→                  <Phone className="h-3.5 w-3.5 text-[#8A9884]" /> <span className="tabular-nums">{s.phone}</span>
+   457→                </div>
+   458→              )}
+   459→              {s.note && <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-[#6B7A66]">{s.note}</p>}
+   460→
+   461→              {(s.companies ?? []).length > 0 && (
+   462→                <div className="mt-3 flex flex-wrap gap-1.5">
+   463→                  {(s.companies ?? []).map((c) => <CompanyChip key={c.company.id} name={c.company.name} />)}
+   464→                </div>
+   465→              )}
+   466→
+   467→              {/* actions row: companies drill-down + per-supplier price-list XLS export (round-trips with the import) */}
+   468→              <div className="mt-auto flex gap-2">
+   469→                <button
+   470→                  type="button"
+   471→                  onClick={() => setOpenSupplier(s)}
+   472→                  className="flex min-h-[44px] min-w-0 flex-1 items-center justify-between gap-2 rounded-xl border border-[#E4DCC8] bg-[#FBF9F3] px-3.5 py-2 text-xs font-semibold text-[#4A5A44] transition hover:border-[#5F8F55] hover:bg-[#F3F7EF]"
+   473→                >
+   474→                  <span className="flex items-center gap-1.5">
+   475→                    <Package className="h-3.5 w-3.5" /> {toFaDigits(s._count?.products ?? 0)} محصول
+   476→                  </span>
+   477→                  <span className="flex items-center text-[#5F8F55]">مشاهده شرکت‌ها <ChevronLeft className="h-4 w-4" /></span>
+   478→                </button>
+   479→                {canExportPrices && (
+   480→                  <button
+   481→                    type="button"
+   482→                    onClick={() => void exportPriceList(s)}
+   483→                    disabled={exportingId === s.id}
+   484→                    className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-1.5 rounded-xl border border-[#EAD9A8] bg-[#FBF6E8] px-3 py-2 text-xs font-bold text-[#8A6508] transition hover:bg-[#F5EDD3] disabled:cursor-not-allowed disabled:opacity-50"
+   485→                    title={`خروجی اکسل فهرست قیمت ${s.name}`}
+   486→                    aria-label={`خروجی اکسل فهرست قیمت ${s.name}`}
+   487→                    data-price-list-export={s.id}
+   488→                  >
+   489→                    {exportingId === s.id ? <Spinner className="h-4 w-4" /> : <FileSpreadsheet className="h-4 w-4" />}
+   490→                    <span className="hidden sm:inline">فهرست قیمت (اکسل)</span>
+   491→                    <span className="sm:hidden">اکسل</span>
+   492→                  </button>
+   493→                )}
+   494→              </div>
+   495→
+   496→              {/* per-supplier stock footer: N items · M low-stock (rose dot when low) + price-import recency */}
+   497→              <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-[#8A9884]" data-supplier-stock-footer>
+   498→                {(s.lowCount ?? 0) > 0 && (
+   499→                  <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-rose-500" />
+   500→                )}
+   501→                <span>
+   502→                  {toFaDigits(s.productsCount ?? s._count?.products ?? 0)} قلم
+   503→                  {' · '}
+   504→                  <span className={(s.lowCount ?? 0) > 0 ? 'font-bold text-rose-600' : ''}>
+   505→                    {toFaDigits(s.lowCount ?? 0)} کم‌موجود
+   506→                  </span>
+   507→                </span>
+   508→                <span aria-hidden>·</span>
+   509→                <span
+   510→                  className={importStale ? 'font-semibold text-amber-700' : 'font-semibold text-[#3E6B4A]'}
+   511→                  data-supplier-price-recency={s.id}
+   512→                  data-stale={importStale ? '1' : '0'}
+   513→                  title={lastImport ? `آخرین ورود فهرست قیمت توسط ${lastImport.by}` : 'هنوز فهرست قیمتی برای این تأمین‌کننده وارد نشده'}
+   514→                >
+   515→                  آخرین فهرست: {lastImport ? <TimeAgo iso={lastImport.at} /> : 'ثبت نشده'}
+   516→                </span>
+   517→              </div>
+   518→            </Card>
+   519→            )
+   520→          })}
+   521→        </div>
+   522→      )}
+   523→
+   524→      {/* ---------- supplier modal ---------- */}
+   525→      <Modal open={supOpen} onClose={() => setSupOpen(false)} wide title={editingSup ? `ویرایش: ${editingSup.name}` : 'تامین‌کننده جدید'}>
+   526→        <div className="space-y-3">
+   527→          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+   528→            <Field label="نام" required>
+   529→              <input value={supForm.name} onChange={(e) => setSupForm((f) => ({ ...f, name: e.target.value }))} className={inputCls} placeholder="پخش زیتون کرمان" />
+   530→            </Field>
+   531→            <Field label="نوع">
+   532→              <select value={supForm.kind} onChange={(e) => setSupForm((f) => ({ ...f, kind: e.target.value }))} className={inputCls}>
+   533→                <option value="MANUFACTURER">تولیدکننده</option>
+   534→                <option value="DISTRIBUTOR">پخش</option>
+   535→                <option value="BOTH">هردو</option>
+   536→              </select>
+   537→            </Field>
+   538→            <Field label="تلفن">
+   539→              <input value={supForm.phone} onChange={(e) => setSupForm((f) => ({ ...f, phone: e.target.value }))} className={inputCls} dir="ltr" placeholder="034-…" />
+   540→            </Field>
+   541→            <Field label="شرایط پرداخت">
+   542→              <select value={supForm.paymentTerms} onChange={(e) => setSupForm((f) => ({ ...f, paymentTerms: e.target.value }))} className={inputCls}>
+   543→                <option value="CASH">نقدی</option>
+   544→                <option value="CHEQUE">چک</option>
+   545→                <option value="MIXED">مختلط</option>
+   546→              </select>
+   547→            </Field>
+   548→            <Field label="روزهای چک">
+   549→              <input type="number" min={0} value={supForm.chequeDays} onChange={(e) => setSupForm((f) => ({ ...f, chequeDays: e.target.value }))} className={inputCls} dir="ltr" />
+   550→            </Field>
+   551→            <Field label="یادداشت">
+   552→              <input value={supForm.note} onChange={(e) => setSupForm((f) => ({ ...f, note: e.target.value }))} className={inputCls} />
+   553→            </Field>
+   554→          </div>
+   555→          <Field label="شرکت‌های این تامین‌کننده">
+   556→            <div className="max-h-40 overflow-y-auto pz-scroll rounded-xl border border-[#E4DCC8] bg-white p-2">
+   557→              <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+   558→                {companies.map((c) => (
+   559→                  <label key={c.id} className="flex min-h-[36px] cursor-pointer items-center gap-2 rounded-lg px-2 text-sm text-[#33402F] hover:bg-[#F3F7EF]">
+   560→                    <input
+   561→                      type="checkbox"
+   562→                      checked={supForm.companyIds.includes(c.id)}
+   563→                      onChange={() => toggleCompany(c.id)}
+   564→                      className="h-4 w-4 accent-[#3E6B4A]"
+   565→                    />
+   566→                    {c.name}
+   567→                  </label>
+   568→                ))}
+   569→                {companies.length === 0 && <span className="p-2 text-xs text-[#8A9884]">شرکتی ثبت نشده است.</span>}
+   570→              </div>
+   571→            </div>
+   572→          </Field>
+   573→          <div className="flex justify-end gap-2 border-t border-[#EFEAD8] pt-3">
+   574→            <GhostButton onClick={() => setSupOpen(false)} className="min-h-[44px]">انصراف</GhostButton>
+   575→            <PrimaryButton onClick={() => void saveSupplier()} disabled={savingSup} className="min-h-[44px]">
+   576→              {savingSup ? <Spinner /> : <Plus className="h-4 w-4" />} ذخیره
+   577→            </PrimaryButton>
+   578→          </div>
+   579→        </div>
+   580→      </Modal>
+   581→
+   582→      {/* ---------- company modal ---------- */}
+   583→      <Modal open={comOpen} onClose={() => setComOpen(false)} title="شرکت / برند جدید">
+   584→        <div className="space-y-3">
+   585→          <Field label="نام شرکت" required>
+   586→            <input value={comName} onChange={(e) => setComName(e.target.value)} className={inputCls} placeholder="Kalleh" />
+   587→          </Field>
+   588→          <div className="flex justify-end gap-2 border-t border-[#EFEAD8] pt-3">
+   589→            <GhostButton onClick={() => setComOpen(false)} className="min-h-[44px]">انصراف</GhostButton>
+   590→            <GoldButton onClick={() => void saveCompany()} disabled={savingCom} className="min-h-[44px]">
+   591→              {savingCom ? <Spinner /> : <Plus className="h-4 w-4" />} ثبت شرکت
+   592→            </GoldButton>
+   593→          </div>
+   594→        </div>
+   595→      </Modal>
+   596→    </div>
+   597→  )
+   598→}
+   599→

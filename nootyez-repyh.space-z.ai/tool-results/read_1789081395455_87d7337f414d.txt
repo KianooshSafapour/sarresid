@@ -1,0 +1,651 @@
+     1→'use client'
+     2→import * as React from 'react'
+     3→import { toast } from 'sonner'
+     4→import {
+     5→  AlertTriangle, Ban, Banknote, CalendarDays, Check, ChevronDown, ChevronUp,
+     6→  Landmark, PenLine, Plus, RefreshCw, Send, Stamp, X,
+     7→} from 'lucide-react'
+     8→import { api } from '@/lib/api'
+     9→import { useApp } from '@/lib/store'
+    10→import { hasRole, type PUser } from '@/lib/types'
+    11→import {
+    12→  addDaysISO, fmtJalali, fmtJalaliLong, fmtMoney, fmtMoneyShort,
+    13→  isoToJalali, JALALI_MONTHS, toFaDigits, todayISO,
+    14→} from '@/lib/jalali'
+    15→import { cn } from '@/lib/utils'
+    16→import { JalaliCalendar, JalaliDateField } from './JalaliCalendar'
+    17→import {
+    18→  Badge, Card, EmptyState, Field, GhostButton, inputCls, Loading, Modal,
+    19→  PrimaryButton, SectionHeader, StatCard, StatusBadge,
+    20→} from './kit'
+    21→
+    22→/* =============== local types =============== */
+    23→
+    24→interface ChequeRow {
+    25→  id: number
+    26→  orderId: number | null
+    27→  purpose: string
+    28→  payee: string | null
+    29→  amount: number
+    30→  dueDate: string
+    31→  status: string
+    32→  recipientName: string | null
+    33→  recipientPhone: string | null
+    34→  note: string | null
+    35→  createdAt: string
+    36→  createdById?: number
+    37→  signedAt?: string | null
+    38→  writtenAt?: string | null
+    39→  order?: { code: string } | null
+    40→}
+    41→
+    42→interface UserRow { id: number; name: string }
+    43→
+    44→interface ListOrder {
+    45→  id: number
+    46→  code: string
+    47→  status: string
+    48→  total: number
+    49→  supplier?: { id: number; name: string } | null
+    50→}
+    51→
+    52→const SECTIONS: { key: string; label: string; statuses: string[] }[] = [
+    53→  { key: 'pending', label: 'در انتظار تایید مالک', statuses: ['PENDING_APPROVAL'] },
+    54→  { key: 'approved', label: 'تایید شده', statuses: ['APPROVED'] },
+    55→  { key: 'written', label: 'نوشته/امضا شده', statuses: ['WRITTEN', 'SIGNED'] },
+    56→  { key: 'given', label: 'تحویل به نماینده', statuses: ['GIVEN'] },
+    57→  { key: 'collected', label: 'وصول/پایان', statuses: ['COLLECTED', 'DONE'] },
+    58→  { key: 'closed', label: 'رد/برگشتی', statuses: ['REJECTED', 'BOUNCED'] },
+    59→]
+    60→
+    61→const STALE_SIGNED_MS = 3 * 24 * 3600 * 1000
+    62→const TERMINAL = ['COLLECTED', 'DONE', 'REJECTED', 'BOUNCED']
+    63→
+    64→function jMonthKey(iso: string): string {
+    65→  const { jy, jm } = isoToJalali(iso)
+    66→  return `${jy}-${String(jm).padStart(2, '0')}`
+    67→}
+    68→
+    69→/* =============== main section =============== */
+    70→
+    71→export default function PaymentsSection({ user }: { user: PUser }) {
+    72→  const openOrder = useApp((s) => s.openOrder)
+    73→  const isOwner = hasRole(user, 'OWNER')
+    74→  const isGM = hasRole(user, 'GENERAL_MANAGER')
+    75→
+    76→  const [loading, setLoading] = React.useState(true)
+    77→  const [cheques, setCheques] = React.useState<ChequeRow[]>([])
+    78→  const [holidays, setHolidays] = React.useState<Record<string, string>>({})
+    79→  const [doneOrders, setDoneOrders] = React.useState<ListOrder[]>([])
+    80→  const [confirmedOrders, setConfirmedOrders] = React.useState<ListOrder[]>([])
+    81→  const [usersMap, setUsersMap] = React.useState<Record<number, string>>({})
+    82→
+    83→  // calendar month anchor (any ISO date inside the viewed Jalali month)
+    84→  const [anchor, setAnchor] = React.useState(todayISO())
+    85→
+    86→  // section collapse state (owner sees pending open by default)
+    87→  const [openSections, setOpenSections] = React.useState<Record<string, boolean>>({
+    88→    pending: true, approved: true, written: true, given: true, collected: false, closed: false,
+    89→  })
+    90→
+    91→  // new cheque modal
+    92→  const [showNew, setShowNew] = React.useState(false)
+    93→  const [purpose, setPurpose] = React.useState<'ORDER' | 'OTHER'>('ORDER')
+    94→  const [orderId, setOrderId] = React.useState('')
+    95→  const [amount, setAmount] = React.useState('')
+    96→  const [dueDate, setDueDate] = React.useState<string | null>(null)
+    97→  const [recipientName, setRecipientName] = React.useState('')
+    98→  const [recipientPhone, setRecipientPhone] = React.useState('')
+    99→  const [payee, setPayee] = React.useState('')
+   100→  const [note, setNote] = React.useState('')
+   101→  const [saving, setSaving] = React.useState(false)
+   102→
+   103→  // reject modal
+   104→  const [rejectTarget, setRejectTarget] = React.useState<ChequeRow | null>(null)
+   105→  const [rejectReason, setRejectReason] = React.useState('')
+   106→  const [rejecting, setRejecting] = React.useState(false)
+   107→
+   108→  const load = React.useCallback(async () => {
+   109→    setLoading(true)
+   110→    try {
+   111→      const [c, h, dn, cf, us] = await Promise.all([
+   112→        api.get<{ cheques: ChequeRow[] }>('/api/cheques'),
+   113→        api.get<{ holidays: { date: string; title: string }[] }>('/api/holidays'),
+   114→        api.get<{ orders: ListOrder[] }>('/api/orders?status=DONE'),
+   115→        api.get<{ orders: ListOrder[] }>('/api/orders?status=CONFIRMED'),
+   116→        api.get<{ users: UserRow[] }>('/api/users'),
+   117→      ])
+   118→      setCheques(c.cheques)
+   119→      setHolidays(Object.fromEntries(h.holidays.map((x) => [x.date, x.title])))
+   120→      setDoneOrders(dn.orders)
+   121→      setConfirmedOrders(cf.orders)
+   122→      setUsersMap(Object.fromEntries(us.users.map((u) => [u.id, u.name])))
+   123→    } catch {
+   124→      toast.error('خطا در بارگذاری چک‌ها و تقویم')
+   125→    } finally {
+   126→      setLoading(false)
+   127→    }
+   128→  }, [])
+   129→
+   130→  React.useEffect(() => { load() }, [load])
+   131→
+   132→  /* ---- derived ---- */
+   133→  const highlight = React.useMemo(() => {
+   134→    const m: Record<string, string> = {}
+   135→    for (const c of cheques) {
+   136→      const iso = c.dueDate.slice(0, 10)
+   137→      m[iso] = m[iso] ? `${m[iso]} + 💰` : '💰 سررسید چک'
+   138→    }
+   139→    return m
+   140→  }, [cheques])
+   141→
+   142→  const anchorKey = jMonthKey(anchor)
+   143→  const monthCheques = React.useMemo(
+   144→    () => cheques
+   145→      .filter((c) => jMonthKey(c.dueDate) === anchorKey)
+   146→      .sort((a, b) => (a.dueDate < b.dueDate ? -1 : 1)),
+   147→    [cheques, anchorKey]
+   148→  )
+   149→
+   150→  const dueThisMonth = monthCheques.filter((c) => !TERMINAL.includes(c.status)).reduce((s, c) => s + c.amount, 0)
+   151→  const collectedThisMonth = monthCheques.filter((c) => c.status === 'COLLECTED' || c.status === 'DONE').reduce((s, c) => s + c.amount, 0)
+   152→  const awaitingOwner = cheques.filter((c) => c.status === 'PENDING_APPROVAL')
+   153→
+   154→  const staleSigned = cheques.filter(
+   155→    (c) => c.status === 'SIGNED' && c.signedAt && Date.now() - new Date(c.signedAt).getTime() > STALE_SIGNED_MS
+   156→  )
+   157→
+   158→  const anchorJ = isoToJalali(anchor)
+   159→  const anchorMonthLabel = `${JALALI_MONTHS[anchorJ.jm - 1]} ${toFaDigits(anchorJ.jy)}`
+   160→
+   161→  /* ---- actions ---- */
+   162→  const act = async (c: ChequeRow, action: string, extra?: Record<string, unknown>, msg?: string) => {
+   163→    try {
+   164→      await api.patch('/api/cheques', { id: c.id, action, userId: user.id, ...extra })
+   165→      toast.success(msg ?? 'ثبت شد ✓')
+   166→      load()
+   167→    } catch (e) {
+   168→      toast.error(e instanceof Error ? e.message : 'خطا در ثبت عملیات')
+   169→    }
+   170→  }
+   171→
+   172→  const submitReject = async () => {
+   173→    if (!rejectTarget) return
+   174→    setRejecting(true)
+   175→    try {
+   176→      await api.patch('/api/cheques', { id: rejectTarget.id, action: 'reject', userId: user.id, reason: rejectReason })
+   177→      toast.success('چک رد شد')
+   178→      setRejectTarget(null)
+   179→      setRejectReason('')
+   180→      load()
+   181→    } catch (e) {
+   182→      toast.error(e instanceof Error ? e.message : 'خطا در رد چک')
+   183→    } finally {
+   184→      setRejecting(false)
+   185→    }
+   186→  }
+   187→
+   188→  /* ---- new cheque ---- */
+   189→  const linkableOrders = React.useMemo(
+   190→    () => [...doneOrders, ...confirmedOrders].sort((a, b) => (a.code < b.code ? 1 : -1)),
+   191→    [doneOrders, confirmedOrders]
+   192→  )
+   193→
+   194→  const pickOrder = (id: string) => {
+   195→    setOrderId(id)
+   196→    const o = linkableOrders.find((x) => String(x.id) === id)
+   197→    if (o) setAmount(String(Math.round(o.total)))
+   198→  }
+   199→
+   200→  const selectedHoliday = dueDate ? holidays[dueDate] : undefined
+   201→  const holidaySuggestions = React.useMemo(() => {
+   202→    if (!dueDate) return []
+   203→    return [1, 2, 3]
+   204→      .map((k) => ({ k, iso: addDaysISO(dueDate, -k) }))
+   205→      .filter((s) => !holidays[s.iso])
+   206→  }, [dueDate, holidays])
+   207→
+   208→  const openNew = () => {
+   209→    setPurpose('ORDER'); setOrderId(''); setAmount(''); setDueDate(null)
+   210→    setRecipientName(''); setRecipientPhone(''); setPayee(''); setNote('')
+   211→    setShowNew(true)
+   212→  }
+   213→
+   214→  const submitNew = async () => {
+   215→    const amt = Number(amount)
+   216→    if (!isFinite(amt) || amt <= 0) { toast.error('مبلغ چک را درست وارد کنید'); return }
+   217→    if (!dueDate) { toast.error('تاریخ سررسید را انتخاب کنید'); return }
+   218→    if (holidays[dueDate]) { toast.error('سررسید نمی‌تواند روی روز تعطیل باشد'); return }
+   219→    if (purpose === 'ORDER' && !orderId) { toast.error('برای چک سفارش، سفارش را انتخاب کنید'); return }
+   220→    setSaving(true)
+   221→    try {
+   222→      await api.post('/api/cheques', {
+   223→        orderId: purpose === 'ORDER' && orderId ? Number(orderId) : undefined,
+   224→        purpose,
+   225→        amount: amt,
+   226→        dueDate,
+   227→        recipientName: recipientName || undefined,
+   228→        recipientPhone: recipientPhone || undefined,
+   229→        payee: payee || undefined,
+   230→        note: note || undefined,
+   231→        createdById: user.id,
+   232→      })
+   233→      toast.success('چک ثبت شد و در انتظار تایید مالک است ✓')
+   234→      setShowNew(false)
+   235→      load()
+   236→    } catch (e) {
+   237→      toast.error(e instanceof Error ? e.message : 'خطا در ثبت چک')
+   238→    } finally {
+   239→      setSaving(false)
+   240→    }
+   241→  }
+   242→
+   243→  /* ---- per-cheque action buttons ---- */
+   244→  const renderActions = (c: ChequeRow) => {
+   245→    const btns: React.ReactNode[] = []
+   246→    if (c.status === 'PENDING_APPROVAL' && isOwner) {
+   247→      btns.push(
+   248→        <PrimaryButton
+   249→          key="approve"
+   250→          className="min-h-[48px] flex-[2] text-base"
+   251→          onClick={() => act(c, 'approve', {}, 'چک تایید شد ✓')}
+   252→        >
+   253→          <Check size={18} /> تایید چک
+   254→        </PrimaryButton>,
+   255→        <DangerGhost key="reject" onClick={() => { setRejectTarget(c); setRejectReason('') }} />
+   256→      )
+   257→    }
+   258→    if (c.status === 'APPROVED' && isOwner) {
+   259→      btns.push(<MiniBtn key="write" icon={<PenLine size={15} />} label="نوشتن چک" onClick={() => act(c, 'write', {}, 'چک نوشته شد ✓')} />)
+   260→    }
+   261→    if (c.status === 'WRITTEN' && isOwner) {
+   262→      btns.push(<MiniBtn key="sign" icon={<Stamp size={15} />} label="امضا" onClick={() => act(c, 'sign', {}, 'چک امضا شد ✓')} />)
+   263→    }
+   264→    if (isGM) {
+   265→      if (c.status === 'SIGNED') {
+   266→        btns.push(<MiniBtn key="give" icon={<Send size={15} />} label="تحویل به نماینده" onClick={() => act(c, 'give', {}, 'چک تحویل داده شد ✓')} />)
+   267→      }
+   268→      if (c.status === 'GIVEN') {
+   269→        btns.push(<MiniBtn key="collect" icon={<Banknote size={15} />} label="وصول شد" onClick={() => act(c, 'collect', {}, 'چک وصول شد ✓')} />)
+   270→      }
+   271→      if (['WRITTEN', 'SIGNED', 'GIVEN'].includes(c.status)) {
+   272→        btns.push(<MiniBtn key="bounce" icon={<Ban size={15} />} label="برگشت چک" tone="rose" onClick={() => act(c, 'bounce', {}, 'چک برگشتی ثبت شد')} />)
+   273→      }
+   274→    }
+   275→    if (btns.length === 0) return null
+   276→    return <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-[#EFEAD8] pt-3">{btns}</div>
+   277→  }
+   278→
+   279→  const renderChequeCard = (c: ChequeRow) => {
+   280→    const isHolidayDue = !!holidays[c.dueDate.slice(0, 10)]
+   281→    const isStale = c.status === 'SIGNED' && !!c.signedAt && Date.now() - new Date(c.signedAt).getTime() > STALE_SIGNED_MS
+   282→    const ownerPending = isOwner && c.status === 'PENDING_APPROVAL'
+   283→    return (
+   284→      <Card
+   285→        key={c.id}
+   286→        className={cn(
+   287→          'p-4',
+   288→          ownerPending && 'border-[#DAA520]/60 bg-gradient-to-br from-[#FFFDF5] to-white shadow-[0_2px_16px_-4px_rgba(184,134,11,0.25)]',
+   289→          isStale && !ownerPending && 'ring-2 ring-rose-300'
+   290→        )}
+   291→      >
+   292→        <div className="flex items-start justify-between gap-2">
+   293→          <div className="min-w-0">
+   294→            <div className="text-lg font-extrabold tabular-nums text-[#253A2A]">{fmtMoney(c.amount)}</div>
+   295→            <div className={cn('mt-0.5 text-xs font-semibold', isHolidayDue ? 'text-rose-600' : 'text-[#6B7A66]')}>
+   296→              سررسید: {fmtJalaliLong(c.dueDate)}
+   297→            </div>
+   298→          </div>
+   299→          <StatusBadge status={c.status} kind="cheque" />
+   300→        </div>
+   301→
+   302→        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-[#6B7A66]">
+   303→          {c.orderId && c.order?.code ? (
+   304→            <button
+   305→              type="button"
+   306→              onClick={() => openOrder(c.orderId!)}
+   307→              className="inline-flex min-h-[32px] items-center gap-1 rounded-full border border-[#D8E2D0] bg-[#F3F7EF] px-2.5 py-0.5 font-semibold text-[#3E6B4A] transition hover:bg-[#E7EFE2]"
+   308→            >
+   309→              سفارش {c.order.code}
+   310→            </button>
+   311→          ) : (
+   312→            <Badge className="border-[#E4DCC8] bg-[#F5F2E8] text-[#6B7A66]">متفرقه</Badge>
+   313→          )}
+   314→          {c.recipientName && <span>گیرنده: <b>{c.recipientName}</b></span>}
+   315→          {c.recipientPhone && <span dir="ltr" className="font-mono">{c.recipientPhone}</span>}
+   316→          {c.payee && <span>در وجه: {c.payee}</span>}
+   317→        </div>
+   318→
+   319→        <div className="mt-1.5 text-[11px] text-[#8A9884]">
+   320→          ثبت توسط: {c.createdById ? usersMap[c.createdById] ?? '—' : '—'} · {fmtJalali(c.createdAt)}
+   321→        </div>
+   322→
+   323→        {c.note && (
+   324→          <div className="mt-2 rounded-lg bg-[#F5F2E8] px-3 py-1.5 text-xs leading-5 text-[#6B7A66]">{c.note}</div>
+   325→        )}
+   326→
+   327→        {isStale && (
+   328→          <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-700">
+   329→            <AlertTriangle size={14} /> چک نوشته شده ولی جمع نشده — پیگیری کنید
+   330→          </div>
+   331→        )}
+   332→
+   333→        {ownerPending && !isStale && (
+   334→          <div className="mt-2 text-[11px] font-semibold text-[#8A6508]">در انتظار تایید شما، آقای نوروزی</div>
+   335→        )}
+   336→
+   337→        {renderActions(c)}
+   338→      </Card>
+   339→    )
+   340→  }
+   341→
+   342→  const renderSection = (sec: (typeof SECTIONS)[number]) => {
+   343→    const list = cheques.filter((c) => sec.statuses.includes(c.status))
+   344→    const open = !!openSections[sec.key]
+   345→    const isOwnerPending = isOwner && sec.key === 'pending'
+   346→    return (
+   347→      <Card key={sec.key} className={cn('overflow-hidden', isOwnerPending && list.length > 0 && 'border-[#DAA520]/60')}>
+   348→        <button
+   349→          type="button"
+   350→          onClick={() => setOpenSections((s) => ({ ...s, [sec.key]: !s[sec.key] }))}
+   351→          className={cn(
+   352→            'flex min-h-[52px] w-full items-center justify-between gap-2 px-4 py-3 text-right transition',
+   353→            isOwnerPending && list.length > 0 ? 'bg-gradient-to-l from-[#FFF7E0] to-[#FFFDF5]' : 'bg-[#FBF9F3] hover:bg-[#F5F2E8]'
+   354→          )}
+   355→          aria-expanded={open}
+   356→        >
+   357→          <span className="flex items-center gap-2">
+   358→            <span className="text-sm font-extrabold text-[#253A2A]">{sec.label}</span>
+   359→            <Badge className={cn(
+   360→              'tabular-nums',
+   361→              isOwnerPending && list.length > 0 ? 'border-[#DAA520]/50 bg-[#FFF3D6] text-[#8A6508]' : 'border-[#E4DCC8] bg-white text-[#6B7A66]'
+   362→            )}>
+   363→              {toFaDigits(list.length)}
+   364→            </Badge>
+   365→            {isOwnerPending && list.length > 0 && (
+   366→              <span className="hidden text-[11px] font-bold text-[#8A6508] sm:inline">— مناسب تایید آقای نوروزی</span>
+   367→            )}
+   368→          </span>
+   369→          {open ? <ChevronUp size={17} className="text-[#8A9884]" /> : <ChevronDown size={17} className="text-[#8A9884]" />}
+   370→        </button>
+   371→        {open && (
+   372→          <div className="space-y-3 border-t border-[#EFEAD8] p-3">
+   373→            {list.length === 0 ? (
+   374→              <div className="py-3 text-center text-xs text-[#8A9884]">چکی در این وضعیت نیست</div>
+   375→            ) : (
+   376→              list.map(renderChequeCard)
+   377→            )}
+   378→          </div>
+   379→        )}
+   380→      </Card>
+   381→    )
+   382→  }
+   383→
+   384→  return (
+   385→    <div>
+   386→      <SectionHeader
+   387→        title="پرداخت‌ها | Payments"
+   388→        subtitle="مدیریت چک‌ها، سررسیدها و تایید مالک"
+   389→        icon={<Landmark size={20} />}
+   390→        actions={
+   391→          <>
+   392→            <GhostButton className="min-h-[44px]" onClick={load} aria-label="بازخوانی">
+   393→              <RefreshCw size={15} /> <span className="hidden sm:inline">بازخوانی</span>
+   394→            </GhostButton>
+   395→            {isGM && (
+   396→              <PrimaryButton className="min-h-[44px]" onClick={openNew}>
+   397→                <Plus size={16} /> چک جدید | New Cheque
+   398→              </PrimaryButton>
+   399→            )}
+   400→          </>
+   401→        }
+   402→      />
+   403→
+   404→      {/* stats */}
+   405→      <div className="mb-4 grid gap-3 sm:grid-cols-3">
+   406→        <StatCard label={`سررسید ${anchorMonthLabel}`} value={fmtMoneyShort(dueThisMonth)} sub={`${toFaDigits(monthCheques.length)} چک در این ماه`} icon={<CalendarDays size={20} />} tone="gold" />
+   407→        <StatCard label="در انتظار تایید مالک" value={toFaDigits(awaitingOwner.length)} sub="چک‌های PENDING_APPROVAL" icon={<Landmark size={20} />} tone="rose" />
+   408→        <StatCard label={`وصول ${anchorMonthLabel}`} value={fmtMoneyShort(collectedThisMonth)} sub="چک‌های وصول/پایان‌یافته" icon={<Banknote size={20} />} tone="olive" />
+   409→      </div>
+   410→
+   411→      {loading ? (
+   412→        <Loading label="در حال بارگذاری چک‌ها…" />
+   413→      ) : (
+   414→        <div className="grid items-start gap-4 lg:grid-cols-[340px_1fr]">
+   415→          {/* ---- calendar column ---- */}
+   416→          <div className="space-y-4">
+   417→            <Card className="p-3">
+   418→              <JalaliCalendar
+   419→                value={anchor}
+   420→                onChange={setAnchor}
+   421→                holidays={holidays}
+   422→                highlight={highlight}
+   423→              />
+   424→              <div className="mt-2 flex flex-wrap items-center gap-3 border-t border-[#EFEAD8] pt-2 text-[11px] text-[#8A9884]">
+   425→                <span>💰 سررسید چک</span>
+   426→                <span>🔴 تعطیل رسمی</span>
+   427→              </div>
+   428→              {holidays[anchor] && (
+   429→                <div className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700">
+   430→                  ⚠ این روز تعطیل است: {holidays[anchor]}
+   431→                </div>
+   432→              )}
+   433→            </Card>
+   434→
+   435→            {/* cheques of the selected month */}
+   436→            <Card className="p-4">
+   437→              <h3 className="mb-2 text-sm font-bold text-[#253A2A]">چک‌های {anchorMonthLabel}</h3>
+   438→              {monthCheques.length === 0 ? (
+   439→                <div className="py-4 text-center text-xs text-[#8A9884]">در این ماه چکی سررسید نمی‌شود</div>
+   440→              ) : (
+   441→                <div className="max-h-72 space-y-2 overflow-y-auto pl-1 pz-scroll">
+   442→                  {monthCheques.map((c) => (
+   443→                    <div key={c.id} className="flex items-center justify-between gap-2 rounded-xl border border-[#EFEAD8] bg-white px-3 py-2">
+   444→                      <div className="min-w-0">
+   445→                        <div className="truncate text-xs font-bold tabular-nums text-[#253A2A]">{fmtMoney(c.amount)}</div>
+   446→                        <div className={cn('text-[10px]', holidays[c.dueDate.slice(0, 10)] ? 'font-bold text-rose-600' : 'text-[#8A9884]')}>
+   447→                          {fmtJalaliLong(c.dueDate)}
+   448→                        </div>
+   449→                      </div>
+   450→                      <StatusBadge status={c.status} kind="cheque" />
+   451→                    </div>
+   452→                  ))}
+   453→                </div>
+   454→              )}
+   455→            </Card>
+   456→          </div>
+   457→
+   458→          {/* ---- grouped list column ---- */}
+   459→          <div className="space-y-3">
+   460→            {staleSigned.length > 0 && (
+   461→              <div className="flex items-center gap-2 rounded-2xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">
+   462→                <AlertTriangle size={18} className="shrink-0" />
+   463→                {toFaDigits(staleSigned.length)} چک نوشته و امضا شده ولی جمع نشده — پیگیری کنید
+   464→              </div>
+   465→            )}
+   466→            {cheques.length === 0 ? (
+   467→              <EmptyState icon={<Landmark size={40} />} title="هنوز چکی ثبت نشده" hint={isGM ? 'با دکمه «چک جدید» اولین چک را ثبت کنید.' : 'چک‌های ثبت‌شده اینجا نمایش داده می‌شوند.'} />
+   468→            ) : (
+   469→              SECTIONS.map(renderSection)
+   470→            )}
+   471→          </div>
+   472→        </div>
+   473→      )}
+   474→
+   475→      {/* ================= new cheque modal ================= */}
+   476→      <Modal open={showNew} onClose={() => setShowNew(false)} title="چک جدید | New Cheque">
+   477→        <div className="space-y-4">
+   478→          {/* purpose */}
+   479→          <div>
+   480→            <span className="mb-1 block text-xs font-semibold text-[#4A5A44]">هدف چک</span>
+   481→            <div className="grid grid-cols-2 gap-2">
+   482→              {([
+   483→                { v: 'ORDER' as const, label: 'سفارش | Order' },
+   484→                { v: 'OTHER' as const, label: 'متفرقه | Other' },
+   485→              ]).map((o) => (
+   486→                <button
+   487→                  key={o.v} type="button"
+   488→                  onClick={() => { setPurpose(o.v); if (o.v === 'OTHER') setOrderId('') }}
+   489→                  aria-pressed={purpose === o.v}
+   490→                  className={cn(
+   491→                    'min-h-[44px] rounded-xl border-2 px-3 text-sm font-bold transition-all active:scale-[0.98]',
+   492→                    purpose === o.v
+   493→                      ? 'border-[#3A6242] bg-[#3A6242] text-white shadow-md'
+   494→                      : 'border-[#D8D2BC] bg-white text-[#4A5A44] hover:bg-[#F3F7EF]'
+   495→                  )}
+   496→                >
+   497→                  {o.label}
+   498→                </button>
+   499→              ))}
+   500→            </div>
+   501→          </div>
+   502→
+   503→          {purpose === 'ORDER' ? (
+   504→            <Field label="انتخاب سفارش" hint="سفارش‌های بسته‌شده یا آماده حسابداری — با انتخاب، مبلغ خودکار پر می‌شود" required>
+   505→              <select className={inputCls} value={orderId} onChange={(e) => pickOrder(e.target.value)}>
+   506→                <option value="">— انتخاب سفارش —</option>
+   507→                {linkableOrders.map((o) => (
+   508→                  <option key={o.id} value={String(o.id)}>
+   509→                    {o.code} — {o.supplier?.name ?? '—'} — {fmtMoneyShort(o.total)}
+   510→                  </option>
+   511→                ))}
+   512→              </select>
+   513→            </Field>
+   514→          ) : (
+   515→            <Field label="توضیح هدف چک" hint="مثلاً: اجاره محل، برق، خرج تنخواه" required>
+   516→              <input className={inputCls} value={note} onChange={(e) => setNote(e.target.value)} placeholder="هدف چک متفرقه را بنویسید…" />
+   517→            </Field>
+   518→          )}
+   519→
+   520→          <Field label="مبلغ (تومان)" required>
+   521→            <input
+   522→              type="number" inputMode="decimal" min={0} step="any"
+   523→              className={cn(inputCls, 'font-bold tabular-nums')}
+   524→              value={amount}
+   525→              onChange={(e) => setAmount(e.target.value)}
+   526→              placeholder="0"
+   527→            />
+   528→          </Field>
+   529→
+   530→          <div>
+   531→            <JalaliDateField
+   532→              label="تاریخ سررسید"
+   533→              value={dueDate}
+   534→              onChange={setDueDate}
+   535→              holidays={holidays}
+   536→              minDate={todayISO()}
+   537→            />
+   538→            {selectedHoliday && (
+   539→              <div className="mt-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-semibold leading-5 text-amber-800">
+   540→                ⚠ این روز تعطیل است: {selectedHoliday} — چک باید قبل از تعطیلات سررسید شود
+   541→                {holidaySuggestions.length > 0 && (
+   542→                  <div className="mt-2 flex flex-wrap gap-1.5">
+   543→                    {holidaySuggestions.map((s) => (
+   544→                      <GhostButton
+   545→                        key={s.iso}
+   546→                        type="button"
+   547→                        className="min-h-[36px] px-2.5 py-1 text-xs"
+   548→                        onClick={() => setDueDate(s.iso)}
+   549→                      >
+   550→                        {toFaDigits(s.k)} روز قبل — {fmtJalali(s.iso)}
+   551→                      </GhostButton>
+   552→                    ))}
+   553→                  </div>
+   554→                )}
+   555→              </div>
+   556→            )}
+   557→          </div>
+   558→
+   559→          <div className="grid gap-3 sm:grid-cols-2">
+   560→            <Field label="نام نماینده گیرنده">
+   561→              <input className={inputCls} value={recipientName} onChange={(e) => setRecipientName(e.target.value)} placeholder="نام نماینده تامین‌کننده" />
+   562→            </Field>
+   563→            <Field label="تلفن گیرنده">
+   564→              <input className={inputCls} dir="ltr" value={recipientPhone} onChange={(e) => setRecipientPhone(e.target.value)} placeholder="0913..." />
+   565→            </Field>
+   566→          </div>
+   567→          {purpose === 'ORDER' && (
+   568→            <Field label="در وجه (Payee)">
+   569→              <input className={inputCls} value={payee} onChange={(e) => setPayee(e.target.value)} placeholder="نام شخص یا شرکت در وجه چک" />
+   570→            </Field>
+   571→          )}
+   572→          {purpose === 'ORDER' && (
+   573→            <Field label="یادداشت">
+   574→              <input className={inputCls} value={note} onChange={(e) => setNote(e.target.value)} placeholder="توضیح اختیاری…" />
+   575→            </Field>
+   576→          )}
+   577→
+   578→          <PrimaryButton
+   579→            className="min-h-[48px] w-full text-base"
+   580→            onClick={submitNew}
+   581→            disabled={saving || !!selectedHoliday}
+   582→          >
+   583→            {saving ? 'در حال ثبت…' : 'ثبت چک'}
+   584→          </PrimaryButton>
+   585→          {selectedHoliday && (
+   586→            <p className="text-center text-[11px] font-semibold text-amber-700">تا وقتی سررسید تعطیل است، دکمه ثبت غیرفعال می‌ماند</p>
+   587→          )}
+   588→        </div>
+   589→      </Modal>
+   590→
+   591→      {/* ================= reject modal ================= */}
+   592→      <Modal open={!!rejectTarget} onClose={() => setRejectTarget(null)} title="رد چک">
+   593→        <div className="space-y-3">
+   594→          {rejectTarget && (
+   595→            <div className="text-sm text-[#4A5A44]">
+   596→              رد چک <b className="tabular-nums">{fmtMoney(rejectTarget.amount)}</b>
+   597→              {rejectTarget.order?.code ? <> مربوط به سفارش <b>{rejectTarget.order.code}</b></> : null} — دلیل را بنویسید:
+   598→            </div>
+   599→          )}
+   600→          <textarea
+   601→            className={cn(inputCls, 'min-h-[88px] resize-y')}
+   602→            value={rejectReason}
+   603→            onChange={(e) => setRejectReason(e.target.value)}
+   604→            placeholder="مثلاً: فروش نرفت، سررسید باید عقب بیفتد…"
+   605→            aria-label="دلیل رد چک"
+   606→          />
+   607→          <div className="flex flex-col gap-2 sm:flex-row">
+   608→            <PrimaryButton className="min-h-[44px] flex-1" onClick={submitReject} disabled={rejecting}>
+   609→              {rejecting ? 'در حال ثبت…' : 'ثبت رد چک'}
+   610→            </PrimaryButton>
+   611→            <GhostButton className="min-h-[44px]" onClick={() => setRejectTarget(null)}>لغو</GhostButton>
+   612→          </div>
+   613→        </div>
+   614→      </Modal>
+   615→    </div>
+   616→  )
+   617→}
+   618→
+   619→/* =============== tiny inline helpers =============== */
+   620→
+   621→function MiniBtn({ icon, label, onClick, tone = 'olive' }: {
+   622→  icon: React.ReactNode; label: string; onClick: () => void; tone?: 'olive' | 'rose'
+   623→}) {
+   624→  return (
+   625→    <button
+   626→      type="button"
+   627→      onClick={onClick}
+   628→      className={cn(
+   629→        'inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-all active:scale-[0.98]',
+   630→        tone === 'rose'
+   631→          ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+   632→          : 'border-[#D8E2D0] bg-[#F3F7EF] text-[#3E6B4A] hover:bg-[#E7EFE2]'
+   633→      )}
+   634→    >
+   635→      {icon}{label}
+   636→    </button>
+   637→  )
+   638→}
+   639→
+   640→function DangerGhost({ onClick }: { onClick: () => void }) {
+   641→  return (
+   642→    <button
+   643→      type="button"
+   644→      onClick={onClick}
+   645→      className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-4 text-sm font-bold text-rose-700 transition-all hover:bg-rose-100 active:scale-[0.98]"
+   646→    >
+   647→      <X size={16} /> رد
+   648→    </button>
+   649→  )
+   650→}
+   651→

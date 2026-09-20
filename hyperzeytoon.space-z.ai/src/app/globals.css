@@ -1,0 +1,677 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-vazir);
+  --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-gold: var(--gold);
+  --color-pistachio: var(--pistachio);
+  --color-pomegranate: var(--pomegranate);
+  --color-saffron: var(--saffron);
+  --color-copper: var(--copper);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* ============================================================================
+   HYPER ZEYTOON — KERMAN DESIGN SYSTEM
+   Light: «کاشی و خامه» cream + pistachio + gold.
+   Dark:  «شب کویر» (desert night) — warm charcoal, ivory text, glowing gold.
+   Accents: [data-accent] on <html> — pistachio | saffron | pomegranate |
+            copper | turquoise. Each defines light + dark values.
+   Density: [data-density='compact'] — tighter paddings.
+   Pattern: [data-pattern='boteh'|'paisley'|'plain'] — background motifs.
+   NOTE (charts): recharts components hardcode brand hexes; those stay readable
+   on both themes. The --chart-* vars below are the documented palette for any
+   component that reads CSS vars (brightened set for dark surfaces).
+   ========================================================================== */
+
+:root {
+  --radius: 0.75rem;
+  /* Hyper Zeytoon — Kerman light palette */
+  --background: #faf7f0;            /* cream */
+  --foreground: #2c2620;            /* walnut ink */
+  --card: #fffdf8;
+  --card-foreground: #2c2620;
+  --popover: #fffdf8;
+  --popover-foreground: #2c2620;
+  --primary: #3e7c59;               /* pistachio */
+  --primary-foreground: #fdfaf2;
+  --secondary: #f1e9d8;             /* sand */
+  --secondary-foreground: #4a3f2e;
+  --muted: #f3eee2;
+  --muted-foreground: #7a705d;
+  --accent: #eef3ea;                /* pale pistachio (hover tint) */
+  --accent-foreground: #2f5741;
+  --destructive: #b33a3a;           /* pomegranate */
+  --border: #e4dcc9;
+  --input: #e4dcc9;
+  --ring: #3e7c59;
+  --gold: #c9a227;
+  --pistachio: #3e7c59;
+  --pomegranate: #b33a3a;
+  --saffron: #d9832e;
+  --copper: #8a6f3c;
+  --chart-1: #3e7c59;
+  --chart-2: #c9a227;
+  --chart-3: #b07d2b;
+  --chart-4: #2e6e8e;
+  --chart-5: #7d5ba6;
+  --sidebar: #232d26;               /* deep pistachio-ink */
+  --sidebar-foreground: #e9e4d5;
+  --sidebar-primary: #c9a227;
+  --sidebar-primary-foreground: #232d26;
+  --sidebar-accent: rgba(201, 162, 39, 0.12);
+  --sidebar-accent-foreground: #f3ead2;
+  --sidebar-border: rgba(201, 162, 39, 0.25);
+  --sidebar-ring: #c9a227;
+}
+
+/* ---------- Accent themes — LIGHT (must precede .dark in source order so the
+   .dark block (equal specificity, later) wins when both match) -------------- */
+
+[data-accent='pistachio'] {
+  --primary: #3e7c59;
+  --primary-foreground: #fdfaf2;
+  --ring: #3e7c59;
+  --accent: #eef3ea;
+  --accent-foreground: #2f5741;
+  --sidebar-primary: #c9a227;
+  --sidebar-primary-foreground: #232d26;
+  --sidebar-accent: rgba(201, 162, 39, 0.12);
+  --sidebar-accent-foreground: #f3ead2;
+  --sidebar-border: rgba(201, 162, 39, 0.25);
+  --sidebar-ring: #c9a227;
+}
+
+[data-accent='saffron'] {
+  --primary: #a97e10;               /* زعفرانی — deep for cream bg */
+  --primary-foreground: #fff9e8;
+  --ring: #a97e10;
+  --accent: #f8efd6;
+  --accent-foreground: #7a5a08;
+  --sidebar-primary: #e3b341;
+  --sidebar-primary-foreground: #241c07;
+  --sidebar-accent: rgba(227, 179, 65, 0.14);
+  --sidebar-accent-foreground: #f4e6bd;
+  --sidebar-border: rgba(227, 179, 65, 0.3);
+  --sidebar-ring: #e3b341;
+}
+
+[data-accent='pomegranate'] {
+  --primary: #b33a3a;               /* اناری */
+  --primary-foreground: #fff5f0;
+  --ring: #b33a3a;
+  --accent: #f9e9e4;
+  --accent-foreground: #8a2f2f;
+  --sidebar-primary: #e07a6f;
+  --sidebar-primary-foreground: #2a0e0e;
+  --sidebar-accent: rgba(224, 122, 111, 0.14);
+  --sidebar-accent-foreground: #f6d4cd;
+  --sidebar-border: rgba(224, 122, 111, 0.3);
+  --sidebar-ring: #e07a6f;
+}
+
+[data-accent='copper'] {
+  --primary: #a5642a;               /* مسی */
+  --primary-foreground: #fff6ec;
+  --ring: #a5642a;
+  --accent: #f7ead9;
+  --accent-foreground: #7d4a1c;
+  --sidebar-primary: #d89a5b;
+  --sidebar-primary-foreground: #241204;
+  --sidebar-accent: rgba(216, 154, 91, 0.15);
+  --sidebar-accent-foreground: #f2dcbc;
+  --sidebar-border: rgba(216, 154, 91, 0.3);
+  --sidebar-ring: #d89a5b;
+}
+
+[data-accent='turquoise'] {
+  --primary: #1f7e7e;               /* فیروزه‌ای — کاشی نی‌شاپوری */
+  --primary-foreground: #f0fbfa;
+  --ring: #1f7e7e;
+  --accent: #e2f1f0;
+  --accent-foreground: #175f5f;
+  --sidebar-primary: #4fb3b3;
+  --sidebar-primary-foreground: #07211f;
+  --sidebar-accent: rgba(79, 179, 179, 0.15);
+  --sidebar-accent-foreground: #cdeae8;
+  --sidebar-border: rgba(79, 179, 179, 0.32);
+  --sidebar-ring: #4fb3b3;
+}
+
+/* ---------- «شب کویر» — desert-night dark palette (warm charcoal) ---------- */
+.dark {
+  --background: #16130f;            /* warm charcoal, coffee-brown undertone */
+  --foreground: #efe7d6;            /* warm ivory */
+  --card: #1e1a14;
+  --card-foreground: #efe7d6;
+  --popover: #211c15;               /* lifted a hair above card for overlays */
+  --popover-foreground: #efe7d6;
+  --primary: #7fb894;               /* pistachio bloom — luminous on charcoal */
+  --primary-foreground: #12201a;
+  --secondary: #2a241b;             /* warm sand-charcoal */
+  --secondary-foreground: #e6dcc6;
+  --muted: #241f17;
+  --muted-foreground: #a89c84;
+  --accent: #2a2418;                /* warm hover tint */
+  --accent-foreground: #ead9a8;
+  --destructive: #d96a5f;
+  --border: #33291c;                /* warm border */
+  --input: #3a2e1f;
+  --ring: #7fb894;
+  --gold: #e0bc4a;
+  --pistachio: #7fb894;
+  --pomegranate: #d9776b;
+  --saffron: #e89b4e;
+  --copper: #c08a4e;
+  --chart-1: #7fb894;
+  --chart-2: #e0bc4a;
+  --chart-3: #ce9455;
+  --chart-4: #5fa8c9;
+  --chart-5: #a98bd6;
+  --sidebar: #120f0b;               /* deepest night — behind everything */
+  --sidebar-foreground: #e9e2d2;
+  --sidebar-primary: #e0bc4a;
+  --sidebar-primary-foreground: #120f0b;
+  --sidebar-accent: rgba(224, 188, 74, 0.14);
+  --sidebar-accent-foreground: #f3ead2;
+  --sidebar-border: rgba(224, 188, 74, 0.24);
+  --sidebar-ring: #e0bc4a;
+}
+
+/* ---------- Accent themes — DARK (specificity 0,2,0 beats plain .dark) ----- */
+.dark[data-accent='pistachio'] {
+  --primary: #7fb894;
+  --primary-foreground: #12201a;
+  --ring: #7fb894;
+  --accent: #2a2418;
+  --accent-foreground: #ead9a8;
+  --sidebar-primary: #e0bc4a;
+  --sidebar-primary-foreground: #120f0b;
+  --sidebar-accent: rgba(224, 188, 74, 0.14);
+  --sidebar-accent-foreground: #f3ead2;
+  --sidebar-border: rgba(224, 188, 74, 0.24);
+  --sidebar-ring: #e0bc4a;
+}
+
+.dark[data-accent='saffron'] {
+  --primary: #e3b341;
+  --primary-foreground: #241c07;
+  --ring: #e3b341;
+  --accent: #2d2513;
+  --accent-foreground: #f2dfa6;
+  --sidebar-primary: #e3b341;
+  --sidebar-primary-foreground: #241c07;
+  --sidebar-accent: rgba(227, 179, 65, 0.16);
+  --sidebar-accent-foreground: #f4e6bd;
+  --sidebar-border: rgba(227, 179, 65, 0.28);
+  --sidebar-ring: #e3b341;
+}
+
+.dark[data-accent='pomegranate'] {
+  --primary: #e07a6f;
+  --primary-foreground: #2a0e0e;
+  --ring: #e07a6f;
+  --accent: #2e1c17;
+  --accent-foreground: #f4c4bb;
+  --sidebar-primary: #e07a6f;
+  --sidebar-primary-foreground: #2a0e0e;
+  --sidebar-accent: rgba(224, 122, 111, 0.16);
+  --sidebar-accent-foreground: #f6d4cd;
+  --sidebar-border: rgba(224, 122, 111, 0.28);
+  --sidebar-ring: #e07a6f;
+}
+
+.dark[data-accent='copper'] {
+  --primary: #d89a5b;
+  --primary-foreground: #241204;
+  --ring: #d89a5b;
+  --accent: #2d2115;
+  --accent-foreground: #f0d3ae;
+  --sidebar-primary: #d89a5b;
+  --sidebar-primary-foreground: #241204;
+  --sidebar-accent: rgba(216, 154, 91, 0.16);
+  --sidebar-accent-foreground: #f2dcbc;
+  --sidebar-border: rgba(216, 154, 91, 0.28);
+  --sidebar-ring: #d89a5b;
+}
+
+.dark[data-accent='turquoise'] {
+  --primary: #4fb3b3;
+  --primary-foreground: #07211f;
+  --ring: #4fb3b3;
+  --accent: #17292a;
+  --accent-foreground: #bfe5e2;
+  --sidebar-primary: #4fb3b3;
+  --sidebar-primary-foreground: #07211f;
+  --sidebar-accent: rgba(79, 179, 179, 0.16);
+  --sidebar-accent-foreground: #cdeae8;
+  --sidebar-border: rgba(79, 179, 179, 0.3);
+  --sidebar-ring: #4fb3b3;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Vazirmatn', 'Segoe UI', Tahoma, sans-serif;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--ring) 30%, transparent);
+  }
+  .dark ::selection {
+    background: color-mix(in srgb, var(--ring) 38%, transparent);
+    color: #fff;
+  }
+}
+
+/* ---------- Persian scrollbar (accent-aware, dark variant) ------------------ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--ring) 40%, transparent) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ring) 35%, transparent);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--ring) 60%, transparent);
+}
+.dark *::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ring) 45%, transparent);
+}
+.dark *::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--ring) 68%, transparent);
+}
+
+/* ---------- Micro-interaction utilities ---------- */
+@utility card-hover {
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 28px -12px rgba(201, 162, 39, 0.35), 0 4px 12px -6px rgba(62, 124, 89, 0.18);
+    border-color: rgba(201, 162, 39, 0.45);
+  }
+}
+
+@utility gold-underline {
+  background-image: linear-gradient(90deg, transparent, rgba(201, 162, 39, 0.6), transparent);
+  background-repeat: no-repeat;
+  background-size: 0% 2px;
+  background-position: 0 100%;
+  transition: background-size 0.35s ease;
+  &:hover {
+    background-size: 100% 2px;
+  }
+}
+
+@keyframes staggerIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.stagger-item {
+  animation: staggerIn 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.stagger-item:nth-child(1) { animation-delay: 0.02s; }
+.stagger-item:nth-child(2) { animation-delay: 0.06s; }
+.stagger-item:nth-child(3) { animation-delay: 0.1s; }
+.stagger-item:nth-child(4) { animation-delay: 0.14s; }
+.stagger-item:nth-child(5) { animation-delay: 0.18s; }
+.stagger-item:nth-child(6) { animation-delay: 0.22s; }
+
+/* refined keyboard focus — accent-aware ring */
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ring) 78%, transparent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* ---------- Kerman patterns — BOTEH (بته‌جقه، پیش‌فرض) ---------------------- */
+.paisley-bg {
+  background-color: var(--background);
+  background-image:
+    radial-gradient(circle at 12% 18%, rgba(201, 162, 39, 0.07) 0, transparent 26%),
+    radial-gradient(circle at 88% 12%, rgba(62, 124, 89, 0.06) 0, transparent 30%),
+    radial-gradient(circle at 78% 88%, rgba(138, 111, 60, 0.05) 0, transparent 28%),
+    url("data:image/svg+xml,%3Csvg width='72' height='72' viewBox='0 0 72 72' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23c9a227' stroke-opacity='0.10'%3E%3Cpath d='M36 8c10 0 18 8 18 17 0 12-14 12-14 22 0 7 6 10 11 10 8 0 13-6 13-6'/%3E%3Cpath d='M36 8C26 8 18 16 18 25c0 12 14 12 14 22 0 7-6 10-11 10-8 0-13-6-13-6'/%3E%3Ccircle cx='36' cy='34' r='3'/%3E%3Cpath d='M8 40c6-2 10 2 10 8s-6 10-10 8'/%3E%3Cpath d='M64 32c-6 2-10-2-10-8s6-10 10-8'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+.sidebar-pattern {
+  background-image:
+    radial-gradient(circle at 20% 8%, rgba(201, 162, 39, 0.08) 0, transparent 34%),
+    url("data:image/svg+xml,%3Csvg width='84' height='84' viewBox='0 0 84 84' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23e0bc4a' stroke-opacity='0.07'%3E%3Cpath d='M42 6c12 0 22 10 22 21 0 15-18 15-18 28 0 9 8 13 14 13 10 0 16-8 16-8'/%3E%3Cpath d='M42 6C30 6 20 16 20 27c0 15 18 15 18 28 0 9-8 13-14 13-10 0-16-8-16-8'/%3E%3Ccircle cx='42' cy='42' r='4'/%3E%3Cpath d='M4 50c8-3 13 3 13 10s-8 13-13 10'/%3E%3Cpath d='M80 34c-8 3-13-3-13-10s8-13 13-10'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* dark («شب کویر») variants: ivory strokes, calmer opacities so the night
+   reads premium instead of noisy */
+.dark .paisley-bg {
+  background-color: var(--background);
+  background-image:
+    radial-gradient(circle at 12% 18%, rgba(224, 188, 74, 0.05) 0, transparent 26%),
+    radial-gradient(circle at 88% 12%, rgba(127, 184, 148, 0.045) 0, transparent 30%),
+    radial-gradient(circle at 78% 88%, rgba(192, 138, 78, 0.04) 0, transparent 28%),
+    url("data:image/svg+xml,%3Csvg width='72' height='72' viewBox='0 0 72 72' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23e0bc4a' stroke-opacity='0.055'%3E%3Cpath d='M36 8c10 0 18 8 18 17 0 12-14 12-14 22 0 7 6 10 11 10 8 0 13-6 13-6'/%3E%3Cpath d='M36 8C26 8 18 16 18 25c0 12 14 12 14 22 0 7-6 10-11 10-8 0-13-6-13-6'/%3E%3Ccircle cx='36' cy='34' r='3'/%3E%3Cpath d='M8 40c6-2 10 2 10 8s-6 10-10 8'/%3E%3Cpath d='M64 32c-6 2-10-2-10-8s6-10 10-8'/%3E%3C/g%3E%3C/svg%3E");
+}
+.dark .sidebar-pattern {
+  background-image:
+    radial-gradient(circle at 20% 8%, rgba(224, 188, 74, 0.06) 0, transparent 34%),
+    url("data:image/svg+xml,%3Csvg width='84' height='84' viewBox='0 0 84 84' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23e0bc4a' stroke-opacity='0.05'%3E%3Cpath d='M42 6c12 0 22 10 22 21 0 15-18 15-18 28 0 9 8 13 14 13 10 0 16-8 16-8'/%3E%3Cpath d='M42 6C30 6 20 16 20 27c0 15 18 15 18 28 0 9-8 13-14 13-10 0-16-8-16-8'/%3E%3Ccircle cx='42' cy='42' r='4'/%3E%3Cpath d='M4 50c8-3 13 3 13 10s-8 13-13 10'/%3E%3Cpath d='M80 34c-8 3-13-3-13-10s8-13 13-10'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* ---------- Pattern option: ESLIMI (اسلیمی — tilework star lattice) ---------
+   data-pattern lives on <html> (and the sidebar root) — ancestor-scoped. --- */
+[data-pattern='paisley'] .paisley-bg {
+  background-image:
+    radial-gradient(circle at 12% 18%, rgba(201, 162, 39, 0.07) 0, transparent 26%),
+    radial-gradient(circle at 88% 12%, rgba(62, 124, 89, 0.06) 0, transparent 30%),
+    url("data:image/svg+xml,%3Csvg width='96' height='96' viewBox='0 0 96 96' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23c9a227' stroke-opacity='0.09'%3E%3Cpath d='M48 6l10 17h20L68 40l6 20-26-9-26 9 6-20L18 23h20z'/%3E%3Ccircle cx='48' cy='72' r='7'/%3E%3Cpath d='M6 52l8 8m68-8l-8 8M48 90l-6-6h12z'/%3E%3C/g%3E%3C/svg%3E");
+}
+[data-pattern='paisley'] .sidebar-pattern {
+  background-image:
+    radial-gradient(circle at 20% 8%, rgba(201, 162, 39, 0.08) 0, transparent 34%),
+    url("data:image/svg+xml,%3Csvg width='96' height='96' viewBox='0 0 96 96' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23e0bc4a' stroke-opacity='0.065'%3E%3Cpath d='M48 6l10 17h20L68 40l6 20-26-9-26 9 6-20L18 23h20z'/%3E%3Ccircle cx='48' cy='72' r='7'/%3E%3Cpath d='M6 52l8 8m68-8l-8 8M48 90l-6-6h12z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.dark[data-pattern='paisley'] .paisley-bg {
+  background-image:
+    radial-gradient(circle at 12% 18%, rgba(224, 188, 74, 0.05) 0, transparent 26%),
+    radial-gradient(circle at 88% 12%, rgba(127, 184, 148, 0.045) 0, transparent 30%),
+    url("data:image/svg+xml,%3Csvg width='96' height='96' viewBox='0 0 96 96' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23e0bc4a' stroke-opacity='0.05'%3E%3Cpath d='M48 6l10 17h20L68 40l6 20-26-9-26 9 6-20L18 23h20z'/%3E%3Ccircle cx='48' cy='72' r='7'/%3E%3Cpath d='M6 52l8 8m68-8l-8 8M48 90l-6-6h12z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.dark[data-pattern='paisley'] .sidebar-pattern {
+  background-image:
+    radial-gradient(circle at 20% 8%, rgba(224, 188, 74, 0.06) 0, transparent 34%),
+    url("data:image/svg+xml,%3Csvg width='96' height='96' viewBox='0 0 96 96' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' stroke='%23e0bc4a' stroke-opacity='0.045'%3E%3Cpath d='M48 6l10 17h20L68 40l6 20-26-9-26 9 6-20L18 23h20z'/%3E%3Ccircle cx='48' cy='72' r='7'/%3E%3Cpath d='M6 52l8 8m68-8l-8 8M48 90l-6-6h12z'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* ---------- Pattern option: PLAIN (ساده) — no motif anywhere --------------- */
+[data-pattern='plain'] .paisley-bg,
+[data-pattern='plain'] .sidebar-pattern {
+  background-image: none;
+}
+
+/* ---------- Density: compact (فشرده) ---------------------------------------
+   Unlayered rules intentionally beat Tailwind utilities. Targets the common
+   surface paddings platform-wide without touching component files. */
+[data-density='compact'] .py-6 { padding-top: 0.875rem; padding-bottom: 0.875rem; }
+[data-density='compact'] .py-8 { padding-top: 1.125rem; padding-bottom: 1.125rem; }
+[data-density='compact'] .stat-sheen { padding: 0.65rem 0.75rem; }
+[data-density='compact'] td, [data-density='compact'] th { padding-top: 0.35rem; padding-bottom: 0.35rem; }
+[data-density='compact'] .nav-btn { min-height: 0; padding-top: 0.35rem; padding-bottom: 0.35rem; }
+[data-density='compact'] .nav-group-title { margin-bottom: 0.25rem; }
+[data-density='compact'] [data-slot='dialog-content'] { gap: 0.75rem; }
+[data-density='compact'] [data-slot='card'] { gap: 0.75rem; }
+
+/* ---------- Glowing borders (Doherty-threshold friendly subtle motion) ----- */
+@keyframes borderGlow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.glow-border {
+  position: relative;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--card), var(--card)) padding-box,
+    linear-gradient(115deg, rgba(201,162,39,.55), rgba(62,124,89,.5), rgba(138,111,60,.55), rgba(201,162,39,.55)) border-box;
+  background-size: 100% 100%, 220% 220%;
+  animation: borderGlow 9s ease infinite;
+}
+.dark .glow-border {
+  background:
+    linear-gradient(var(--card), var(--card)) padding-box,
+    linear-gradient(115deg, rgba(224,188,74,.45), rgba(127,184,148,.4), rgba(192,138,78,.45), rgba(224,188,74,.45)) border-box;
+  background-size: 100% 100%, 220% 220%;
+}
+
+.glow-border-static {
+  position: relative;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--card), var(--card)) padding-box,
+    linear-gradient(115deg, rgba(201,162,39,.5), rgba(62,124,89,.45), rgba(138,111,60,.5)) border-box;
+}
+.dark .glow-border-static {
+  background:
+    linear-gradient(var(--card), var(--card)) padding-box,
+    linear-gradient(115deg, rgba(224,188,74,.4), rgba(127,184,148,.35), rgba(192,138,78,.4)) border-box;
+}
+
+@keyframes softPulse {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.04); }
+}
+.soft-pulse { animation: softPulse 2.6s ease-in-out infinite; }
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in-up { animation: fadeInUp 0.35s ease both; }
+
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg, transparent, rgba(201,162,39,0.13), transparent);
+  background-size: 400px 100%;
+  animation: shimmer 1.8s infinite;
+}
+.dark .shimmer {
+  background: linear-gradient(90deg, transparent, rgba(224,188,74,0.10), transparent);
+  background-size: 400px 100%;
+}
+
+/* ---------- Typography helpers ---------- */
+.num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.text-gold-gradient {
+  background: linear-gradient(120deg, #c9a227, #e6c95c, #8a6f3c, #c9a227);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: borderGlow 6s ease infinite;
+}
+.dark .text-gold-gradient {
+  background: linear-gradient(120deg, #e0bc4a, #f0d878, #b08a45, #e0bc4a);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+/* touch targets ≥44px per accessibility guidelines */
+.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* ---------- StatusBadge dark legibility: components set --sb-c inline;
+   dark mode lifts the text toward ivory via color-mix so saturated brand
+   hexes stay readable on charcoal. --------------------------------------- */
+.status-badge {
+  color: var(--sb-c, inherit);
+}
+.dark .status-badge {
+  color: color-mix(in oklab, var(--sb-c, currentColor) 72%, white);
+}
+
+/* ---------- PRINT: always force the light palette, ignore dark mode ------- */
+@media print {
+  .no-print { display: none !important; }
+  .dark {
+    --background: #ffffff;
+    --foreground: #1c1814;
+    --card: #ffffff;
+    --card-foreground: #1c1814;
+    --popover: #ffffff;
+    --popover-foreground: #1c1814;
+    --primary: #3e7c59;
+    --primary-foreground: #fdfaf2;
+    --secondary: #f1e9d8;
+    --secondary-foreground: #4a3f2e;
+    --muted: #f3eee2;
+    --muted-foreground: #7a705d;
+    --accent: #eef3ea;
+    --accent-foreground: #2f5741;
+    --destructive: #b33a3a;
+    --border: #d8d0bd;
+    --input: #d8d0bd;
+    --ring: #3e7c59;
+    --sidebar: #ffffff;
+    --sidebar-foreground: #1c1814;
+    --sidebar-primary: #c9a227;
+  }
+  html, body {
+    background: #fff !important;
+    color: #1c1814 !important;
+  }
+  * {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+}
+
+/* soft scrollbar for long lists (platform-wide helper) */
+.nice-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #3e7c5944 transparent;
+}
+.nice-scroll::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+.nice-scroll::-webkit-scrollbar-thumb {
+  background: #3e7c5944;
+  border-radius: 999px;
+}
+.nice-scroll::-webkit-scrollbar-thumb:hover {
+  background: #3e7c5988;
+}
+.nice-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------- Round 5 additions: stat sheen, briefing card, ornate empty state */
+
+/* subtle gold sheen sweeping across stat cards */
+.stat-sheen::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(420px 90px at 85% -12%, rgba(201, 162, 39, 0.13), transparent 60%);
+  pointer-events: none;
+}
+.dark .stat-sheen::before {
+  background: radial-gradient(420px 90px at 85% -12%, rgba(224, 188, 74, 0.10), transparent 60%);
+}
+
+/* gradient feature card (daily briefing / SPHL) */
+.briefing-card {
+  border: 1px solid rgba(201, 162, 39, 0.28);
+  background:
+    radial-gradient(600px 160px at 12% -20%, rgba(201, 162, 39, 0.12), transparent 60%),
+    radial-gradient(500px 160px at 92% 120%, rgba(62, 124, 89, 0.10), transparent 55%),
+    var(--card);
+  box-shadow: 0 10px 30px -18px rgba(138, 111, 60, 0.45);
+}
+.dark .briefing-card {
+  border-color: rgba(224, 188, 74, 0.22);
+  background:
+    radial-gradient(600px 160px at 12% -20%, rgba(224, 188, 74, 0.10), transparent 60%),
+    radial-gradient(500px 160px at 92% 120%, rgba(127, 184, 148, 0.12), transparent 55%),
+    var(--card);
+  box-shadow: 0 10px 30px -18px rgba(0, 0, 0, 0.6);
+}
+
+/* faint ornamental watermark helper for empty states */
+.empty-ornate {
+  background-image:
+    radial-gradient(circle at 50% 0%, rgba(201, 162, 39, 0.05), transparent 55%);
+}
+
+/* sidebar active pill — soft animated gold aura */
+@keyframes navAura {
+  0%, 100% { box-shadow: inset 0 0 0 1px rgba(201,162,39,0.4), 0 0 0 0 rgba(201,162,39,0.00); }
+  50% { box-shadow: inset 0 0 0 1px rgba(224,188,74,0.55), 0 0 18px 0 rgba(201,162,39,0.18); }
+}
+.sidebar .nav-active-aura {
+  animation: navAura 5s ease-in-out infinite;
+}
+
+/* number inputs: hide spinners for cleaner money fields */
+input[type='number'].no-spin::-webkit-outer-spin-button,
+input[type='number'].no-spin::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'].no-spin {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* ---------- Round 15 (Task 9-e): Appearance Studio niceties ---------------- */
+/* animated theme icon swap */
+@keyframes themeSwap {
+  from { opacity: 0; transform: rotate(-90deg) scale(0.6); }
+  to { opacity: 1; transform: rotate(0deg) scale(1); }
+}
+.theme-swap-icon { animation: themeSwap 0.28s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* dnd-kit sortable rows in the studio */
+.studio-sortable {
+  transition: box-shadow 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+.studio-sortable[data-dragging='true'] {
+  box-shadow: 0 12px 28px -10px rgba(0, 0, 0, 0.45);
+  z-index: 10;
+}

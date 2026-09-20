@@ -1,0 +1,679 @@
+     1→'use client'
+     2→
+     3→import * as React from 'react'
+     4→import { api } from '@/lib/api'
+     5→import { useApp } from '@/store/app'
+     6→import { useToast } from '@/hooks/use-toast'
+     7→import {
+     8→  SectionHeader, StatCard, StatusBadge, EmptyState, LoadingBlock, UserAvatar, ChipSelect,
+     9→} from '@/components/platform/ui/shared'
+    10→import { JalaliDatePicker } from '@/components/platform/ui/jalali-date-picker'
+    11→import { formatJalali, timeAgo, toFaDigits, jalaliKey } from '@/lib/jalali'
+    12→import { TASK_STATUSES, PRIORITIES, type TaskDTO } from '@/lib/types'
+    13→import { Button } from '@/components/ui/button'
+    14→import { Card, CardContent } from '@/components/ui/card'
+    15→import { Badge } from '@/components/ui/badge'
+    16→import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+    17→import { Textarea } from '@/components/ui/textarea'
+    18→import { Input } from '@/components/ui/input'
+    19→import { Label } from '@/components/ui/label'
+    20→import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+    21→import {
+    22→  ListChecks, Plus, PlayCircle, Eye, PauseCircle, CheckCircle2, MessageSquare,
+    23→  CalendarClock, Loader2, Pencil, AlertTriangle, PartyPopper, ClipboardCheck, ChevronDown,
+    24→} from 'lucide-react'
+    25→
+    26→interface TasksResponse {
+    27→  tasks: TaskDTO[]
+    28→  stats: { open: number; inProgress: number; doneToday: number; overdue: number }
+    29→}
+    30→
+    31→interface UserLite {
+    32→  id: string
+    33→  name: string
+    34→  color: string
+    35→  title: string
+    36→  active: boolean
+    37→}
+    38→
+    39→const CATEGORY_OPTIONS = ['عمومی', 'فروش', 'انبار', 'چیدمان', 'صندوق', 'مشتریان', 'تسویه', 'فوری']
+    40→
+    41→export function Tasks() {
+    42→  const { user } = useApp()
+    43→  const { toast } = useToast()
+    44→  const [tab, setTab] = React.useState<string>('mine')
+    45→  const [data, setData] = React.useState<TasksResponse | null>(null)
+    46→  const [loading, setLoading] = React.useState(true)
+    47→  const [busyId, setBusyId] = React.useState<string | null>(null)
+    48→  const [detail, setDetail] = React.useState<TaskDTO | null>(null)
+    49→  const [detailUpdates, setDetailUpdates] = React.useState<TaskDTO['updates']>([])
+    50→  const [comment, setComment] = React.useState('')
+    51→  const [pauseTarget, setPauseTarget] = React.useState<TaskDTO | null>(null)
+    52→  const [pauseReason, setPauseReason] = React.useState('')
+    53→  const [editorOpen, setEditorOpen] = React.useState(false)
+    54→  const [editTask, setEditTask] = React.useState<TaskDTO | null>(null)
+    55→  const [users, setUsers] = React.useState<UserLite[]>([])
+    56→
+    57→  const isManager = !!user?.isManager
+    58→
+    59→  const load = React.useCallback(async () => {
+    60→    try {
+    61→      const d = await api<TasksResponse>(`/api/tasks?${tab === 'mine' ? 'mine=1' : ''}`)
+    62→      setData(d)
+    63→    } catch (e) {
+    64→      toast({ title: 'دریافت کارها ناموفق بود', description: e instanceof Error ? e.message : '', variant: 'destructive' })
+    65→    } finally {
+    66→      setLoading(false)
+    67→    }
+    68→  }, [tab, toast])
+    69→
+    70→  React.useEffect(() => {
+    71→    setLoading(true)
+    72→    load()
+    73→  }, [load])
+    74→
+    75→  React.useEffect(() => {
+    76→    if (!isManager) return
+    77→    api<{ users: UserLite[] }>('/api/users')
+    78→      .then((d) => setUsers(d.users.filter((u) => u.active)))
+    79→      .catch(() => null)
+    80→  }, [isManager])
+    81→
+    82→  const patch = async (id: string, body: Record<string, unknown>, opts: { celebrate?: boolean; keepOpen?: boolean } = {}) => {
+    83→    setBusyId(id)
+    84→    try {
+    85→      await api(`/api/tasks/${id}`, { method: 'PATCH', body })
+    86→      if (opts.celebrate) {
+    87→        toast({ title: 'آفرین! +۵ امتیاز ⭐', description: 'این کار با موفقیت انجام شد — دستت درد نکند 🎉' })
+    88→      } else {
+    89→        toast({ title: 'ثبت شد 🌿' })
+    90→      }
+    91→      if (!opts.keepOpen) setDetail(null)
+    92→      await load()
+    93→    } catch (e) {
+    94→      toast({ title: 'انجام نشد', description: e instanceof Error ? e.message : '', variant: 'destructive' })
+    95→    } finally {
+    96→      setBusyId(null)
+    97→    }
+    98→  }
+    99→
+   100→  const openDetail = async (t: TaskDTO) => {
+   101→    setDetail(t)
+   102→    setDetailUpdates(t.updates ?? [])
+   103→    try {
+   104→      const d = await api<{ task: TaskDTO }>(`/api/tasks/${t.id}`)
+   105→      setDetailUpdates(d.task.updates ?? [])
+   106→      setDetail(d.task)
+   107→    } catch {
+   108→      /* keep list data */
+   109→    }
+   110→  }
+   111→
+   112→  const sendComment = async () => {
+   113→    if (!detail || !comment.trim()) return
+   114→    const c = comment.trim()
+   115→    setComment('')
+   116→    await patch(detail.id, { updateContent: c }, { keepOpen: true })
+   117→    setDetailUpdates((prev) => [
+   118→      ...(prev ?? []),
+   119→      { id: `tmp-${Date.now()}`, userName: user?.name ?? '', content: c, createdAt: new Date().toISOString() },
+   120→    ])
+   121→  }
+   122→
+   123→  const tasks = data?.tasks ?? []
+   124→  const stats = data?.stats
+   125→
+   126→  return (
+   127→    <div className="space-y-4">
+   128→      <SectionHeader
+   129→        title="کارهای من"
+   130→        subtitle="دستیار تو برای مرتب‌کاری — هر قدم یک پیروزی 🌿"
+   131→        icon={<ListChecks className="h-5 w-5" />}
+   132→        actions={
+   133→          isManager ? (
+   134→            <Button size="sm" className="gap-1.5" onClick={() => { setEditTask(null); setEditorOpen(true) }}>
+   135→              <Plus className="h-4 w-4" /> کار جدید
+   136→            </Button>
+   137→          ) : undefined
+   138→        }
+   139→      />
+   140→
+   141→      {stats && (
+   142→        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+   143→          <StatCard title="باز" value={toFaDigits(stats.open)} color="#8A8F98" icon={<ListChecks className="h-4 w-4" />} />
+   144→          <StatCard title="در جریان" value={toFaDigits(stats.inProgress)} color="#B07D2B" icon={<PlayCircle className="h-4 w-4" />} />
+   145→          <StatCard title="امروز انجام شد" value={toFaDigits(stats.doneToday)} color="#3E7C59" icon={<CheckCircle2 className="h-4 w-4" />} />
+   146→          <StatCard title="گذشته از موعد" value={toFaDigits(stats.overdue)} color="#B33A3A" icon={<CalendarClock className="h-4 w-4" />} />
+   147→        </div>
+   148→      )}
+   149→
+   150→      <Tabs value={tab} onValueChange={setTab}>
+   151→        <TabsList className="w-full md:w-auto">
+   152→          <TabsTrigger value="mine" className="flex-1 md:flex-none">کارهای من</TabsTrigger>
+   153→          {isManager && <TabsTrigger value="all" className="flex-1 md:flex-none">همه کارها</TabsTrigger>}
+   154→        </TabsList>
+   155→
+   156→        <TabsContent value="mine" className="mt-3">
+   157→          <DailyChecklist />
+   158→          {loading ? <LoadingBlock rows={4} /> : tasks.length === 0 ? (
+   159→            <EmptyState
+   160→              icon={<PartyPopper />}
+   161→              title="همه‌چیز مرتب است!"
+   162→              description="فعلاً کاری برایت نداریم. وقت خوبی برای یک استراحت کوتاه است ☕"
+   163→            />
+   164→          ) : (
+   165→            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+   166→              {tasks.map((t) => (
+   167→                <TaskCard
+   168→                  key={t.id}
+   169→                  task={t}
+   170→                  mine
+   171→                  busy={busyId === t.id}
+   172→                  onOpen={() => openDetail(t)}
+   173→                  onStatus={(s) => {
+   174→                    if (s === 'PAUSED') { setPauseTarget(t); setPauseReason('') }
+   175→                    else patch(t.id, { status: s }, { celebrate: s === 'DONE' })
+   176→                  }}
+   177→                />
+   178→              ))}
+   179→            </div>
+   180→          )}
+   181→        </TabsContent>
+   182→
+   183→        {isManager && (
+   184→          <TabsContent value="all" className="mt-3">
+   185→            {loading ? <LoadingBlock rows={4} /> : tasks.length === 0 ? (
+   186→              <EmptyState icon={<ListChecks />} title="هنوز کاری ثبت نشده" description="با «کار جدید» اولین کار را به تیم بسپار." />
+   187→            ) : (
+   188→              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+   189→                {tasks.map((t) => (
+   190→                  <TaskCard
+   191→                    key={t.id}
+   192→                    task={t}
+   193→                    busy={busyId === t.id}
+   194→                    onOpen={() => openDetail(t)}
+   195→                    onEdit={() => { setEditTask(t); setEditorOpen(true) }}
+   196→                  />
+   197→                ))}
+   198→              </div>
+   199→            )}
+   200→          </TabsContent>
+   201→        )}
+   202→      </Tabs>
+   203→
+   204→      {/* pause reason dialog */}
+   205→      <Dialog open={!!pauseTarget} onOpenChange={(o) => !o && setPauseTarget(null)}>
+   206→        <DialogContent className="max-w-sm">
+   207→          <DialogHeader>
+   208→            <DialogTitle className="flex items-center gap-2">
+   209→              <PauseCircle className="h-5 w-5 text-saffron" /> توقف موقت کار
+   210→            </DialogTitle>
+   211→            <DialogDescription>
+   212→              اشکالی ندارد! فقط بگو چه چیزی مانع شده تا همکاران بدانند. هر وقت آماده بودی ادامه می‌دهیم.
+   213→            </DialogDescription>
+   214→          </DialogHeader>
+   215→          <Textarea
+   216→            value={pauseReason}
+   217→            onChange={(e) => setPauseReason(e.target.value)}
+   218→            placeholder="مثلاً: منتظر تحویل کالا هستم…"
+   219→            rows={3}
+   220→          />
+   221→          <div className="flex gap-2 justify-end">
+   222→            <Button variant="ghost" onClick={() => setPauseTarget(null)}>بی‌خیال</Button>
+   223→            <Button
+   224→              disabled={!pauseReason.trim() || !pauseTarget || busyId === pauseTarget.id}
+   225→              onClick={() => {
+   226→                if (pauseTarget) patch(pauseTarget.id, { status: 'PAUSED', pauseReason }).then(() => setPauseTarget(null))
+   227→              }}
+   228→            >
+   229→              ثبت توقف
+   230→            </Button>
+   231→          </div>
+   232→        </DialogContent>
+   233→      </Dialog>
+   234→
+   235→      {/* detail dialog */}
+   236→      <Dialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
+   237→        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+   238→          {detail && (
+   239→            <>
+   240→              <DialogHeader>
+   241→                <DialogTitle className="text-right">{detail.title}</DialogTitle>
+   242→                <DialogDescription className="text-right">
+   243→                  {detail.description || 'توضیحی ثبت نشده است.'}
+   244→                </DialogDescription>
+   245→              </DialogHeader>
+   246→              <div className="flex flex-wrap items-center gap-2 text-xs">
+   247→                <StatusBadge label={statusInfo(detail.status).label} color={statusInfo(detail.status).color} />
+   248→                <Badge variant="outline" className="rounded-full">{detail.category}</Badge>
+   249→                <span className="flex items-center gap-1 text-muted-foreground">
+   250→                  <CalendarClock className="h-3.5 w-3.5" /> موعد: {formatJalali(detail.dueDate)}
+   251→                </span>
+   252→                {detail.fromOwner && (
+   253→                  <Badge className="rounded-full text-white" style={{ background: 'linear-gradient(120deg,#c9a227,#8a6f3c)' }}>
+   254→                    👑 از سوی مالک
+   255→                  </Badge>
+   256→                )}
+   257→                {detail.assigneeName && (
+   258→                  <span className="flex items-center gap-1.5">
+   259→                    <UserAvatar name={detail.assigneeName} color={detail.assigneeColor ?? '#3E7C59'} size={22} />
+   260→                    {detail.assigneeName}
+   261→                  </span>
+   262→                )}
+   263→              </div>
+   264→              {detail.status === 'PAUSED' && detail.pauseReason && (
+   265→                <div className="rounded-xl bg-saffron/10 border border-saffron/40 p-3 text-xs text-saffron flex items-start gap-2">
+   266→                  <PauseCircle className="h-4 w-4 shrink-0 mt-0.5" />
+   267→                  <div>
+   268→                    <p className="font-bold">دلیل توقف:</p>
+   269→                    <p>{detail.pauseReason}</p>
+   270→                  </div>
+   271→                </div>
+   272→              )}
+   273→              <div className="space-y-2">
+   274→                <p className="text-sm font-bold flex items-center gap-1.5">
+   275→                  <MessageSquare className="h-4 w-4 text-primary" /> گفتگوی کار
+   276→                </p>
+   277→                <div className="max-h-48 overflow-y-auto space-y-2 pe-1 nice-scroll">
+   278→                  {(detailUpdates ?? []).length === 0 && (
+   279→                    <p className="text-xs text-muted-foreground">هنوز یادداشتی نیست — اولین نفر باش ✍️</p>
+   280→                  )}
+   281→                  {(detailUpdates ?? []).map((u) => (
+   282→                    <div key={u.id} className="rounded-xl bg-accent/60 p-2.5 text-xs">
+   283→                      <div className="flex items-center justify-between gap-2 mb-1">
+   284→                        <span className="font-bold">{u.userName}</span>
+   285→                        <span className="text-muted-foreground">{timeAgo(u.createdAt)}</span>
+   286→                      </div>
+   287→                      <p>{u.content}</p>
+   288→                    </div>
+   289→                  ))}
+   290→                </div>
+   291→                <div className="flex gap-2 pt-1">
+   292→                  <Input
+   293→                    value={comment}
+   294→                    onChange={(e) => setComment(e.target.value)}
+   295→                    onKeyDown={(e) => e.key === 'Enter' && sendComment()}
+   296→                    placeholder="یادداشت یا پیشرفتت را بنویس…"
+   297→                    className="h-10"
+   298→                  />
+   299→                  <Button size="sm" className="h-10 shrink-0" disabled={!comment.trim()} onClick={sendComment}>
+   300→                    ثبت
+   301→                  </Button>
+   302→                </div>
+   303→              </div>
+   304→              {detail.assignedToId === user?.id && detail.status !== 'DONE' && (
+   305→                <div className="grid grid-cols-2 gap-2">
+   306→                  <Button
+   307→                    variant="outline" className="gap-1.5 border-saffron/50 text-saffron"
+   308→                    disabled={busyId === detail.id}
+   309→                    onClick={() => patch(detail.id, { status: 'IN_PROGRESS' })}
+   310→                  >
+   311→                    <PlayCircle className="h-4 w-4" /> شروع
+   312→                  </Button>
+   313→                  <Button
+   314→                    variant="outline" className="gap-1.5"
+   315→                    disabled={busyId === detail.id}
+   316→                    onClick={() => patch(detail.id, { status: 'FOLLOW_UP' })}
+   317→                  >
+   318→                    <Eye className="h-4 w-4" /> پیگیری
+   319→                  </Button>
+   320→                  <Button
+   321→                    variant="outline" className="gap-1.5 border-pomegranate/50 text-pomegranate"
+   322→                    onClick={() => { setPauseTarget(detail); setPauseReason('') }}
+   323→                  >
+   324→                    <PauseCircle className="h-4 w-4" /> توقف
+   325→                  </Button>
+   326→                  <Button
+   327→                    className="gap-1.5" disabled={busyId === detail.id}
+   328→                    onClick={() => patch(detail.id, { status: 'DONE' }, { celebrate: true })}
+   329→                  >
+   330→                    {busyId === detail.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+   331→                    انجام شد ✅
+   332→                  </Button>
+   333→                </div>
+   334→              )}
+   335→            </>
+   336→          )}
+   337→        </DialogContent>
+   338→      </Dialog>
+   339→
+   340→      {/* manager create/edit dialog */}
+   341→      <TaskEditor
+   342→        open={editorOpen}
+   343→        task={editTask}
+   344→        users={users}
+   345→        onClose={() => setEditorOpen(false)}
+   346→        onSaved={() => { setEditorOpen(false); load() }}
+   347→      />
+   348→    </div>
+   349→  )
+   350→}
+   351→
+   352→function statusInfo(status: string) {
+   353→  return TASK_STATUSES.find((s) => s.key === status) ?? { label: status, color: '#8A8F98' }
+   354→}
+   355→
+   356→function TaskCard({
+   357→  task, mine, busy, onOpen, onStatus, onEdit,
+   358→}: {
+   359→  task: TaskDTO
+   360→  mine?: boolean
+   361→  busy?: boolean
+   362→  onOpen: () => void
+   363→  onStatus?: (s: string) => void
+   364→  onEdit?: () => void
+   365→}) {
+   366→  const pr = PRIORITIES.find((p) => p.key === task.priority) ?? PRIORITIES[1]
+   367→  const st = statusInfo(task.status)
+   368→  const overdue = task.dueDate && task.status !== 'DONE' && new Date(task.dueDate).getTime() < Date.now()
+   369→  return (
+   370→    <Card className="glow-border-static overflow-hidden">
+   371→      <CardContent className="p-4 space-y-3">
+   372→        <button onClick={onOpen} className="w-full text-right space-y-2 focus-visible:ring-2 focus-visible:ring-ring rounded-lg">
+   373→          <div className="flex items-start justify-between gap-2">
+   374→            <p className="font-bold leading-6">{task.title}</p>
+   375→            <StatusBadge label={st.label} color={st.color} />
+   376→          </div>
+   377→          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+   378→            <span className="inline-flex items-center gap-1">
+   379→              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: pr.color }} />
+   380→              {pr.label}
+   381→            </span>
+   382→            <Badge variant="secondary" className="rounded-full">{task.category}</Badge>
+   383→            {task.fromOwner && <Badge className="rounded-full text-white" style={{ background: 'linear-gradient(120deg,#c9a227,#8a6f3c)' }}>👑 مالک</Badge>}
+   384→            {task.dueDate && (
+   385→              <span className={overdue ? 'text-pomegranate font-bold' : ''}>
+   386→                📅 {formatJalali(task.dueDate)} {overdue && '(گذشته)'}
+   387→              </span>
+   388→            )}
+   389→          </div>
+   390→          {!mine && task.assigneeName && (
+   391→            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+   392→              <UserAvatar name={task.assigneeName} color={task.assigneeColor ?? '#3E7C59'} size={20} />
+   393→              {task.assigneeName}
+   394→            </div>
+   395→          )}
+   396→          {task.status === 'PAUSED' && task.pauseReason && (
+   397→            <p className="text-xs text-saffron flex items-center gap-1">
+   398→              <PauseCircle className="h-3.5 w-3.5" /> {task.pauseReason}
+   399→            </p>
+   400→          )}
+   401→        </button>
+   402→        {mine && onStatus && task.status !== 'DONE' ? (
+   403→          <div className="grid grid-cols-2 gap-2">
+   404→            {task.status === 'TODO' && (
+   405→              <Button variant="outline" size="sm" className="gap-1.5 border-saffron/50 text-saffron h-10" disabled={busy} onClick={() => onStatus('IN_PROGRESS')}>
+   406→                <PlayCircle className="h-4 w-4" /> شروع
+   407→              </Button>
+   408→            )}
+   409→            {task.status !== 'FOLLOW_UP' && (
+   410→              <Button variant="outline" size="sm" className="h-10" disabled={busy} onClick={() => onStatus('FOLLOW_UP')}>
+   411→                <Eye className="h-4 w-4" /> پیگیری
+   412→              </Button>
+   413→            )}
+   414→            {task.status !== 'PAUSED' && (
+   415→              <Button variant="outline" size="sm" className="gap-1.5 border-pomegranate/50 text-pomegranate h-10" onClick={() => onStatus('PAUSED')}>
+   416→                <PauseCircle className="h-4 w-4" /> توقف
+   417→              </Button>
+   418→            )}
+   419→            <Button size="sm" className="gap-1.5 h-10" disabled={busy} onClick={() => onStatus('DONE')}>
+   420→              <CheckCircle2 className="h-4 w-4" /> انجام شد ✅
+   421→            </Button>
+   422→          </div>
+   423→        ) : (
+   424→          <div className="flex items-center justify-between gap-2">
+   425→            <Button variant="outline" size="sm" className="gap-1.5 h-9" onClick={onOpen}>
+   426→              جزئیات و گفتگو
+   427→            </Button>
+   428→            {onEdit && (
+   429→              <Button variant="ghost" size="sm" className="h-9 gap-1.5" onClick={onEdit}>
+   430→                <Pencil className="h-3.5 w-3.5" /> ویرایش
+   431→              </Button>
+   432→            )}
+   433→          </div>
+   434→        )}
+   435→      </CardContent>
+   436→    </Card>
+   437→  )
+   438→}
+   439→
+   440→function TaskEditor({
+   441→  open, task, users, onClose, onSaved,
+   442→}: {
+   443→  open: boolean
+   444→  task: TaskDTO | null
+   445→  users: UserLite[]
+   446→  onClose: () => void
+   447→  onSaved: () => void
+   448→}) {
+   449→  const { toast } = useToast()
+   450→  const [title, setTitle] = React.useState('')
+   451→  const [description, setDescription] = React.useState('')
+   452→  const [category, setCategory] = React.useState('عمومی')
+   453→  const [priority, setPriority] = React.useState<string>('MEDIUM')
+   454→  const [assignedToId, setAssignedToId] = React.useState<string>('')
+   455→  const [dueDate, setDueDate] = React.useState<Date | null>(null)
+   456→  const [saving, setSaving] = React.useState(false)
+   457→
+   458→  React.useEffect(() => {
+   459→    if (open) {
+   460→      setTitle(task?.title ?? '')
+   461→      setDescription(task?.description ?? '')
+   462→      setCategory(task?.category ?? 'عمومی')
+   463→      setPriority(task?.priority ?? 'MEDIUM')
+   464→      setAssignedToId(task?.assignedToId ?? '')
+   465→      setDueDate(task?.dueDate ? new Date(task.dueDate) : null)
+   466→    }
+   467→  }, [open, task])
+   468→
+   469→  const save = async () => {
+   470→    if (!title.trim()) return
+   471→    setSaving(true)
+   472→    try {
+   473→      const body: Record<string, unknown> = {
+   474→        title, description, category, priority,
+   475→        assignedToId: assignedToId || null,
+   476→        dueDate: dueDate ? dueDate.toISOString() : null,
+   477→      }
+   478→      if (task) {
+   479→        await api(`/api/tasks/${task.id}`, { method: 'PATCH', body })
+   480→      } else {
+   481→        await api('/api/tasks', { body })
+   482→      }
+   483→      toast({ title: task ? 'کار بروز شد 🌿' : 'کار جدید ثبت شد 🌿' })
+   484→      onSaved()
+   485→    } catch (e) {
+   486→      toast({ title: 'ذخیره نشد', description: e instanceof Error ? e.message : '', variant: 'destructive' })
+   487→    } finally {
+   488→      setSaving(false)
+   489→    }
+   490→  }
+   491→
+   492→  return (
+   493→    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+   494→      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+   495→        <DialogHeader>
+   496→          <DialogTitle>{task ? 'ویرایش کار' : 'کار جدید برای تیم'}</DialogTitle>
+   497→          <DialogDescription>هر چه دقیق‌تر بنویسی، همکار راحت‌تر انجامش می‌دهد 💚</DialogDescription>
+   498→        </DialogHeader>
+   499→        <div className="space-y-3">
+   500→          <div className="space-y-1.5">
+   501→            <Label>عنوان</Label>
+   502→            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="مثلاً: چیدمان قفسه لبنیات" />
+   503→          </div>
+   504→          <div className="space-y-1.5">
+   505→            <Label>توضیح</Label>
+   506→            <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="اختیاری" />
+   507→          </div>
+   508→          <div className="space-y-1.5">
+   509→            <Label>دسته‌بندی</Label>
+   510→            <ChipSelect
+   511→              options={CATEGORY_OPTIONS.map((c) => ({ key: c, label: c }))}
+   512→              value={category}
+   513→              onChange={(v) => setCategory(v)}
+   514→            />
+   515→          </div>
+   516→          <div className="space-y-1.5">
+   517→            <Label>اولویت</Label>
+   518→            <ChipSelect options={PRIORITIES} value={priority} onChange={(v) => setPriority(v)} />
+   519→          </div>
+   520→          <div className="space-y-1.5">
+   521→            <Label>مجری</Label>
+   522→            <select
+   523→              value={assignedToId}
+   524→              onChange={(e) => setAssignedToId(e.target.value)}
+   525→              className="w-full h-10 rounded-xl border border-input bg-card px-3 text-sm"
+   526→            >
+   527→              <option value="">— انتخاب همکار —</option>
+   528→              {users.map((u) => (
+   529→                <option key={u.id} value={u.id}>{u.name} ({u.title})</option>
+   530→              ))}
+   531→            </select>
+   532→          </div>
+   533→          <div className="space-y-1.5">
+   534→            <Label>موعد</Label>
+   535→            <JalaliDatePicker value={dueDate} onChange={setDueDate} />
+   536→          </div>
+   537→          <div className="flex justify-end gap-2 pt-1">
+   538→            <Button variant="ghost" onClick={onClose}>انصراف</Button>
+   539→            <Button onClick={save} disabled={saving || !title.trim()} className="gap-1.5">
+   540→              {saving && <Loader2 className="h-4 w-4 animate-spin" />} ذخیره
+   541→            </Button>
+   542→          </div>
+   543→        </div>
+   544→      </DialogContent>
+   545→    </Dialog>
+   546→  )
+   547→}
+   548→
+   549→export function TaskHint() {
+   550→  return (
+   551→    <p className="text-xs text-muted-foreground flex items-center gap-1">
+   552→      <AlertTriangle className="h-3 w-3 text-saffron" /> یادت باشد: هر کار انجام‌شده ۵ امتیاز مثبت دارد.
+   553→    </p>
+   554→  )
+   555→}
+   556→
+   557→// ---------- daily checklist (واقعی‌ترین دوست شیفت!) ----------
+   558→interface ChecklistDTO {
+   559→  id: string
+   560→  title: string
+   561→  items: { text: string }[]
+   562→  state: { text: string; done: boolean }[]
+   563→  completedAt?: string | null
+   564→}
+   565→
+   566→export function DailyChecklist() {
+   567→  const { toast } = useToast()
+   568→  const [lists, setLists] = React.useState<ChecklistDTO[] | null>(null)
+   569→  const [open, setOpen] = React.useState(true)
+   570→  const day = jalaliKey(new Date())
+   571→  const busyRef = React.useRef(false)
+   572→
+   573→  const load = React.useCallback(async () => {
+   574→    try {
+   575→      const d = await api<{ checklists: ChecklistDTO[] }>(`/api/checklists?day=${encodeURIComponent(day)}`)
+   576→      setLists(d.checklists)
+   577→    } catch {
+   578→      setLists([])
+   579→    }
+   580→  }, [day])
+   581→
+   582→  React.useEffect(() => { load() }, [load])
+   583→
+   584→  const toggle = async (list: ChecklistDTO, idx: number) => {
+   585→    if (busyRef.current) return
+   586→    const state = (list.state.length === list.items.length && list.state.length > 0
+   587→      ? list.state
+   588→      : list.items.map((i) => ({ text: i.text, done: false }))
+   589→    ).map((s, j) => (j === idx ? { ...s, done: !s.done } : s))
+   590→    // optimistic
+   591→    setLists((prev) => prev?.map((l) => (l.id === list.id ? { ...l, state, completedAt: null } : l)) ?? prev)
+   592→    busyRef.current = true
+   593→    try {
+   594→      const d = await api<{ success: boolean; completedAt: string | null }>('/api/checklists', {
+   595→        method: 'PATCH',
+   596→        body: { id: list.id, day, state },
+   597→      })
+   598→      if (d.completedAt) {
+   599→        toast({ title: 'آفرین! چک‌لیست امروز کامل شد +۲ امتیاز ⭐', description: 'شیفت تمیزی داشتی — دستت درد نکند 🌿' })
+   600→      }
+   601→      await load()
+   602→    } catch {
+   603→      load()
+   604→    } finally {
+   605→      busyRef.current = false
+   606→    }
+   607→  }
+   608→
+   609→  if (!lists) return null
+   610→  if (lists.length === 0) return null
+   611→
+   612→  const allDone = lists.every((l) => l.completedAt)
+   613→
+   614→  return (
+   615→    <Card className="glow-border-static overflow-hidden mb-4">
+   616→      <button
+   617→        type="button"
+   618→        onClick={() => setOpen((o) => !o)}
+   619→        className="w-full flex items-center justify-between gap-2 p-4 pb-3 text-right"
+   620→        aria-expanded={open}
+   621→      >
+   622→        <span className="flex items-center gap-2 text-sm font-bold">
+   623→          <ClipboardCheck className="h-4 w-4 text-primary" />
+   624→          چک‌لیست امروز
+   625→          {allDone ? (
+   626→            <span className="rounded-full bg-primary/10 text-primary px-2.5 py-1 text-[11px] font-bold">کامل شد ✅ +۲</span>
+   627→          ) : (
+   628→            <span className="rounded-full bg-gold/15 text-gold px-2.5 py-1 text-[11px] font-bold num">
+   629→              {toFaDigits(lists.reduce((s, l) => s + l.state.filter((x) => x.done).length, 0))}/{toFaDigits(lists.reduce((s, l) => s + l.items.length, 0))}
+   630→            </span>
+   631→          )}
+   632→        </span>
+   633→        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
+   634→      </button>
+   635→      {open && (
+   636→        <CardContent className="pt-0 space-y-3">
+   637→          {lists.map((l) => {
+   638→            const state = l.state.length === l.items.length && l.state.length > 0
+   639→              ? l.state
+   640→              : l.items.map((i) => ({ text: i.text, done: false }))
+   641→            return (
+   642→              <div key={l.id} className="rounded-xl border p-3 space-y-2">
+   643→                <p className="text-xs font-bold flex items-center gap-1.5">
+   644→                  {l.title}
+   645→                  {l.completedAt && <CheckCircle2 className="h-3.5 w-3.5 text-primary" />}
+   646→                </p>
+   647→                {l.items.map((item, idx) => {
+   648→                  const done = state[idx]?.done ?? false
+   649→                  return (
+   650→                    <button
+   651→                      key={idx}
+   652→                      type="button"
+   653→                      onClick={() => toggle(l, idx)}
+   654→                      className={`w-full flex items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-right text-xs transition-colors min-h-11 ${
+   655→                        done ? 'bg-primary/10 text-primary line-through decoration-primary/40' : 'hover:bg-accent'
+   656→                      }`}
+   657→                      aria-pressed={done}
+   658→                    >
+   659→                      <span
+   660→                        className={`h-5 w-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${
+   661→                          done ? 'bg-primary border-primary text-primary-foreground' : 'border-input'
+   662→                        }`}
+   663→                      >
+   664→                        {done && <CheckCircle2 className="h-3.5 w-3.5" />}
+   665→                      </span>
+   666→                      <span className="flex-1">{item.text}</span>
+   667→                    </button>
+   668→                  )
+   669→                })}
+   670→              </div>
+   671→            )
+   672→          })}
+   673→          <p className="text-[10px] text-muted-foreground text-center">تکمیل همه‌ی موارد روزانه = ۲ امتیاز تشویقی ⭐</p>
+   674→        </CardContent>
+   675→      )}
+   676→    </Card>
+   677→  )
+   678→}
+   679→

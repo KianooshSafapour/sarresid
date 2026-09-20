@@ -1,0 +1,1305 @@
+     1→'use client'
+     2→import * as React from 'react'
+     3→import { toast } from 'sonner'
+     4→import {
+     5→  AlertTriangle, Camera, CameraOff, CheckCircle2, ClipboardCheck, Eye, History, LayoutGrid, Minus,
+     6→  PackageCheck, Plus, ScanLine, Truck, Volume2, VolumeX, X, XCircle,
+     7→} from 'lucide-react'
+     8→import { api } from '@/lib/api'
+     9→import { useApp } from '@/lib/store'
+    10→import { hasRole, type OrderT, type OrderItemT, type PUser } from '@/lib/types'
+    11→import { fmtJalali, fmtJalaliTime, fmtMoney, toFaDigits, todayISO } from '@/lib/jalali'
+    12→import { cn } from '@/lib/utils'
+    13→import {
+    14→  Badge, Card, EmptyState, Field, GhostButton, GoldButton, inputCls, Loading, Modal, Money,
+    15→  PrimaryButton, ProductImage, SectionHeader, Spinner, StatCard, StatusBadge, Tabs, TableWrap, Td, Th,
+    16→} from './kit'
+    17→import { DeliveryGridSkeleton, TableRowsSkeleton } from './Skeletons'
+    18→import {
+    19→  isScanMuted, playScanErr, playScanOk, playScanWarn, primeScanAudio, setScanMuted,
+    20→} from '@/lib/scan-feedback'
+    21→
+    22→/* =============== BarcodeDetector ambient typing (not in TS DOM lib yet) =============== */
+    23→
+    24→interface BarcodeDetectorResultLike {
+    25→  rawValue: string
+    26→}
+    27→
+    28→interface BarcodeDetectorLike {
+    29→  /** detect() accepts any ImageBitmapSource per spec; we only ever pass the <video> element */
+    30→  detect: (source: HTMLVideoElement) => Promise<BarcodeDetectorResultLike[]>
+    31→}
+    32→
+    33→type BarcodeDetectorCtor = new (options?: { formats?: string[] }) => BarcodeDetectorLike
+    34→
+    35→declare global {
+    36→  interface Window {
+    37→    BarcodeDetector?: BarcodeDetectorCtor
+    38→  }
+    39→}
+    40→
+    41→/* =============== local types =============== */
+    42→
+    43→type ItemStatus = 'OK' | 'MISSING' | 'REJECTED'
+    44→type SheetMode = 'receive' | 'confirm'
+    45→
+    46→interface ListOrder {
+    47→  id: number
+    48→  code: string
+    49→  status: string
+    50→  receivingDate: string
+    51→  subtotal: number
+    52→  vat: number
+    53→  total: number
+    54→  createdAt: string
+    55→  doneAt: string | null
+    56→  supplier?: { id: number; name: string; paymentTerms?: string; chequeDays?: number } | null
+    57→  _count?: { items: number }
+    58→}
+    59→
+    60→interface DetailItem extends OrderItemT {
+    61→  product?: { id: number; name: string; barcode: string | null; imageUrl: string | null } | null
+    62→}
+    63→interface DetailOrder extends OrderT {
+    64→  items: DetailItem[]
+    65→}
+    66→
+    67→interface RowState {
+    68→  qty: number // deliveredQty (receive) / confirmedQty (confirm)
+    69→  printed: string
+    70→  final: string
+    71→  status: ItemStatus
+    72→  note: string
+    73→}
+    74→
+    75→const VAT_RATE = 0.09
+    76→const DELTA_TOLERANCE = 1000 // تومان
+    77→
+    78→/* =============== helpers =============== */
+    79→
+    80→/**
+    81→ * Normalize a scanned/typed order code for matching:
+    82→ * strip Code39 start/stop `*` and all whitespace, map Persian/Arabic digits
+    83→ * to ASCII (manual entry), uppercase. (Inline equivalent of sanitizeCode39
+    84→ * from lib/code39 — that one keeps spaces, which scanners do send, and its
+    85→ * charset filter would mangle the code shown in error messages.)
+    86→ */
+    87→function normalizeOrderCode(raw: string): string {
+    88→  return String(raw ?? '')
+    89→    .replace(/[\s*]+/g, '')
+    90→    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+    91→    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    92→    .toUpperCase()
+    93→}
+    94→
+    95→/**
+    96→ * Stable-read dedupe for the camera detection loop: a raw read only counts
+    97→ * when the SAME value is seen twice in a row (two consecutive detector hits)
+    98→ * — filters one-off glitches/ghost reads. Pure so QA can eval it directly.
+    99→ */
+   100→function dedupeRead(last: string, raw: string): { accept: boolean; last: string } {
+   101→  if (!raw) return { accept: false, last: '' }
+   102→  return { accept: raw === last, last: raw }
+   103→}
+   104→
+   105→/* QA/debug handles (same convention as window.__errs) — lets headless QA eval
+   106→ * the scan normalization/dedupe logic without a camera. */
+   107→if (typeof window !== 'undefined') {
+   108→  ;(window as unknown as Record<string, unknown>).__hzScanDebug = { normalizeOrderCode, dedupeRead }
+   109→}
+   110→
+   111→/** numeric input → number | null (accepts Persian digits too) */
+   112→function num(v: string): number | null {
+   113→  const t = String(v).trim().replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+   114→  if (!t) return null
+   115→  const n = Number(t)
+   116→  return isFinite(n) ? n : null
+   117→}
+   118→
+   119→const round1 = (n: number) => Math.round(n * 100) / 100
+   120→
+   121→function initRows(mode: SheetMode, order: DetailOrder): Record<number, RowState> {
+   122→  const rec: Record<number, RowState> = {}
+   123→  for (const it of order.items) {
+   124→    rec[it.id] = {
+   125→      qty: mode === 'receive'
+   126→        ? (it.deliveredQty ?? it.qty)
+   127→        : (it.confirmedQty ?? it.deliveredQty ?? it.qty),
+   128→      printed: String(it.printedPrice ?? it.unitCost ?? 0),
+   129→      final: String(it.finalCost ?? it.printedPrice ?? it.unitCost ?? 0),
+   130→      status: it.status === 'MISSING' || it.status === 'REJECTED' ? it.status : 'OK',
+   131→      note: it.note ?? '',
+   132→    }
+   133→  }
+   134→  return rec
+   135→}
+   136→
+   137→const STATUS_OPTS: { v: ItemStatus; label: string; activeCls: string; idleCls: string }[] = [
+   138→  { v: 'OK', label: 'سالم', activeCls: 'bg-emerald-500 border-emerald-600 text-white shadow-md', idleCls: 'border-emerald-200 bg-white text-emerald-700' },
+   139→  { v: 'MISSING', label: 'ناقص', activeCls: 'bg-amber-500 border-amber-600 text-white shadow-md', idleCls: 'border-amber-200 bg-white text-amber-700' },
+   140→  { v: 'REJECTED', label: 'مردود', activeCls: 'bg-rose-500 border-rose-600 text-white shadow-md', idleCls: 'border-rose-200 bg-white text-rose-700' },
+   141→]
+   142→
+   143→/* =============== qty stepper (44px touch targets) =============== */
+   144→
+   145→function QtyStepper({ label, value, onChange }: { label: string; value: number; onChange: (n: number) => void }) {
+   146→  return (
+   147→    <div className="min-w-0">
+   148→      <span className="mb-1 block text-xs font-semibold text-[#4A5A44]">{label}</span>
+   149→      <div className="flex items-center gap-1.5">
+   150→        <button
+   151→          type="button" aria-label="کاهش تعداد"
+   152→          onClick={() => onChange(Math.max(0, round1(value - 1)))}
+   153→          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#D8D2BC] bg-white text-[#4A5A44] transition hover:bg-[#F3F7EF] active:scale-95"
+   154→        >
+   155→          <Minus size={16} />
+   156→        </button>
+   157→        <input
+   158→          type="number" inputMode="decimal" min={0} step="any" aria-label={label}
+   159→          value={String(value)}
+   160→          onChange={(e) => { const n = Number(e.target.value); onChange(isFinite(n) && n >= 0 ? round1(n) : 0) }}
+   161→          className="h-11 w-full min-w-0 rounded-xl border border-[#D8D2BC] bg-white text-center text-sm font-bold tabular-nums text-[#253A2A] outline-none focus:border-[#5F8F55] focus:ring-2 focus:ring-[#93C572]/30"
+   162→        />
+   163→        <button
+   164→          type="button" aria-label="افزایش تعداد"
+   165→          onClick={() => onChange(round1(value + 1))}
+   166→          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#D8D2BC] bg-white text-[#4A5A44] transition hover:bg-[#F3F7EF] active:scale-95"
+   167→        >
+   168→          <Plus size={16} />
+   169→        </button>
+   170→      </div>
+   171→    </div>
+   172→  )
+   173→}
+   174→
+   175→/* =============== receive / confirm sheet =============== */
+   176→
+   177→function DeliverySheet({ orderId, mode, user, onClose, onDone }: {
+   178→  orderId: number | null
+   179→  mode: SheetMode
+   180→  user: PUser
+   181→  onClose: () => void
+   182→  onDone: () => void
+   183→}) {
+   184→  const [order, setOrder] = React.useState<DetailOrder | null>(null)
+   185→  const [loading, setLoading] = React.useState(false)
+   186→  const [rows, setRows] = React.useState<Record<number, RowState>>({})
+   187→  const [scan, setScan] = React.useState('')
+   188→  const [saving, setSaving] = React.useState(false)
+   189→  const [barcodeFor, setBarcodeFor] = React.useState<number | null>(null)
+   190→  const [barcodeVal, setBarcodeVal] = React.useState('')
+   191→
+   192→  React.useEffect(() => {
+   193→    if (orderId == null) { setOrder(null); return }
+   194→    let alive = true
+   195→    setLoading(true)
+   196→    setOrder(null)
+   197→    setScan(''); setBarcodeFor(null); setBarcodeVal('')
+   198→    api.get<DetailOrder>(`/api/orders/${orderId}`)
+   199→      .then((o) => { if (!alive) return; setOrder(o); setRows(initRows(mode, o)) })
+   200→      .catch(() => { if (!alive) return; toast.error('خطا در بارگذاری سفارش'); onClose() })
+   201→      .finally(() => { if (alive) setLoading(false) })
+   202→    return () => { alive = false }
+   203→  }, [orderId, mode, onClose])
+   204→
+   205→  const upd = (id: number, patch: Partial<RowState>) =>
+   206→    setRows((r) => (r[id] ? { ...r, [id]: { ...r[id], ...patch } } : r))
+   207→
+   208→  /* ---- barcode scan: mark item OK with full qty ---- */
+   209→  const handleScan = () => {
+   210→    const code = scan.trim()
+   211→    if (!code || !order) return
+   212→    const it = order.items.find((i) => (i.barcode ?? '') === code || (i.product?.barcode ?? '') === code)
+   213→    if (!it) { toast.error('قلمی با این بارکد در سفارش یافت نشد'); return }
+   214→    const q = mode === 'receive' ? it.qty : (it.deliveredQty ?? it.qty)
+   215→    upd(it.id, { status: 'OK', qty: q, note: '' })
+   216→    toast.success(`تایید شد ✓ — ${it.name}`)
+   217→    setScan('')
+   218→  }
+   219→
+   220→  /* ---- add barcode to an item (product) ---- */
+   221→  const saveBarcode = async (itemId: number) => {
+   222→    const barcode = barcodeVal.trim()
+   223→    if (!barcode || orderId == null) return
+   224→    try {
+   225→      await api.patch(`/api/orders/${orderId}`, { action: 'addBarcode', userId: user.id, itemId, barcode })
+   226→      toast.success('بارکد ذخیره شد ✓')
+   227→      setBarcodeVal('')
+   228→      setBarcodeFor(null)
+   229→      setOrder((o) => (o
+   230→        ? { ...o, items: o.items.map((i) => (i.id === itemId && !i.barcode ? { ...i, barcode } : i)) }
+   231→        : o))
+   232→    } catch (e) {
+   233→      toast.error(e instanceof Error ? e.message : 'خطا در ذخیره بارکد')
+   234→    }
+   235→  }
+   236→
+   237→  /* ---- recalc footer ---- */
+   238→  const totals = React.useMemo(() => {
+   239→    if (!order) return { subtotal: 0, vat: 0, total: 0 }
+   240→    let subtotal = 0
+   241→    for (const it of order.items) {
+   242→      const row = rows[it.id]
+   243→      if (!row) continue
+   244→      const cost = mode === 'receive'
+   245→        ? (num(row.printed) ?? it.unitCost)
+   246→        : (num(row.final) ?? it.printedPrice ?? it.unitCost)
+   247→      subtotal += cost * row.qty
+   248→    }
+   249→    const vat = subtotal * VAT_RATE
+   250→    return { subtotal, vat, total: subtotal + vat }
+   251→  }, [order, rows, mode])
+   252→
+   253→  const delta = order ? totals.total - order.total : 0
+   254→  const smallDelta = Math.abs(delta) <= DELTA_TOLERANCE
+   255→
+   256→  const submit = async () => {
+   257→    if (!order) return
+   258→    setSaving(true)
+   259→    try {
+   260→      const items = order.items.map((it) => {
+   261→        const row = rows[it.id] ?? { qty: 0, printed: '', final: '', status: 'OK' as ItemStatus, note: '' }
+   262→        return mode === 'receive'
+   263→          ? {
+   264→            id: it.id,
+   265→            deliveredQty: row.qty,
+   266→            printedPrice: num(row.printed),
+   267→            status: row.status,
+   268→            note: row.note || null,
+   269→            finalCost: num(row.printed),
+   270→          }
+   271→          : {
+   272→            id: it.id,
+   273→            confirmedQty: row.qty,
+   274→            finalCost: num(row.final),
+   275→            status: row.status,
+   276→            note: row.note || null,
+   277→          }
+   278→      })
+   279→      await api.patch(`/api/orders/${order.id}`, {
+   280→        action: mode === 'receive' ? 'receive' : 'confirm',
+   281→        userId: user.id,
+   282→        items,
+   283→      })
+   284→      toast.success(mode === 'receive' ? 'تحویل سفارش ثبت شد ✓' : 'تایید نهایی انبار ثبت شد ✓')
+   285→      onDone()
+   286→      onClose()
+   287→    } catch (e) {
+   288→      toast.error(e instanceof Error ? e.message : 'خطا در ثبت')
+   289→    } finally {
+   290→      setSaving(false)
+   291→    }
+   292→  }
+   293→
+   294→  const isToday = order ? order.receivingDate.slice(0, 10) === todayISO() : false
+   295→
+   296→  return (
+   297→    <Modal
+   298→      open={orderId != null}
+   299→      onClose={onClose}
+   300→      wide
+   301→      title={mode === 'receive' ? 'دریافت تحویل سفارش' : 'تایید نهایی انبار'}
+   302→    >
+   303→      {loading || !order ? (
+   304→        <Loading label="در حال بارگذاری اقلام سفارش…" />
+   305→      ) : (
+   306→        <div className="space-y-4">
+   307→          {/* ---- header ---- */}
+   308→          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[#E4DCC8] bg-white p-4">
+   309→            <div>
+   310→              <div className="flex items-center gap-2">
+   311→                <span className="text-lg font-extrabold text-[#253A2A]">{order.code}</span>
+   312→                <StatusBadge status={order.status} />
+   313→              </div>
+   314→              <div className="mt-0.5 text-sm text-[#6B7A66]">تامین‌کننده: <b className="text-[#3E6B4A]">{order.supplier?.name ?? '—'}</b></div>
+   315→            </div>
+   316→            <div className="text-left">
+   317→              <Badge className={isToday ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-[#E4DCC8] bg-[#F5F2E8] text-[#4A5A44]'}>
+   318→                {isToday ? 'تحویل صبح امروز' : `تحویل: ${fmtJalali(order.receivingDate)}`}
+   319→              </Badge>
+   320→              <div className="mt-1 text-xs text-[#8A9884]">
+   321→                جمع اصلی سفارش: <b className="tabular-nums">{fmtMoney(order.total)}</b> · {toFaDigits(order.items.length)} قلم
+   322→              </div>
+   323→            </div>
+   324→          </div>
+   325→
+   326→          {/* ---- scan box ---- */}
+   327→          <div className="flex items-center gap-2 rounded-xl border border-[#93C572]/50 bg-[#F3F7EF] px-3 py-1.5">
+   328→            <ScanLine size={18} className="shrink-0 text-[#3E6B4A]" />
+   329→            <input
+   330→              autoFocus
+   331→              value={scan}
+   332→              onChange={(e) => setScan(e.target.value)}
+   333→              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleScan() } }}
+   334→              placeholder="بارکد را اسکن کنید و Enter بزنید…"
+   335→              dir="ltr"
+   336→              className="h-11 w-full bg-transparent text-sm text-[#253A2A] outline-none placeholder:text-[#A8A28C]"
+   337→              aria-label="اسکن بارکد"
+   338→            />
+   339→          </div>
+   340→
+   341→          {/* ---- item cards ---- */}
+   342→          <div className="max-h-[46vh] space-y-3 overflow-y-auto pl-1 pz-scroll">
+   343→            {order.items.map((it) => {
+   344→              const row = rows[it.id]
+   345→              if (!row) return null
+   346→              const cost = mode === 'receive'
+   347→                ? (num(row.printed) ?? it.unitCost)
+   348→                : (num(row.final) ?? it.printedPrice ?? it.unitCost)
+   349→              const line = cost * row.qty
+   350→              return (
+   351→                <Card key={it.id} className="p-3">
+   352→                  {/* product head */}
+   353→                  <div className="flex items-center gap-3">
+   354→                    <ProductImage src={it.product?.imageUrl} name={it.name} size={48} />
+   355→                    <div className="min-w-0 flex-1">
+   356→                      <div className="truncate text-sm font-bold text-[#253A2A]">{it.name}</div>
+   357→                      <div className="font-mono text-[11px] text-[#8A9884]" dir="ltr">{it.barcode || it.product?.barcode || '—'}</div>
+   358→                      <div className="text-[11px] text-[#6B7A66]">
+   359→                        مقدار سفارش: <b className="tabular-nums">{toFaDigits(it.qty)}</b>
+   360→                        {mode === 'receive' && it.deliveredQty != null && <> · دریافتی قبلی: <b className="tabular-nums">{toFaDigits(it.deliveredQty)}</b></>}
+   361→                      </div>
+   362→                    </div>
+   363→                    <div className="shrink-0 text-left">
+   364→                      <div className="text-[10px] text-[#8A9884]">جمع خط</div>
+   365→                      <div className="text-xs font-bold tabular-nums text-[#3E6B4A]">{fmtMoney(line)}</div>
+   366→                    </div>
+   367→                  </div>
+   368→
+   369→                  {/* qty + price */}
+   370→                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+   371→                    <QtyStepper
+   372→                      label={mode === 'receive' ? 'تعداد دریافتی' : 'تعداد تایید نهایی'}
+   373→                      value={row.qty}
+   374→                      onChange={(n) => upd(it.id, { qty: n })}
+   375→                    />
+   376→                    {mode === 'receive' ? (
+   377→                      <Field label="قیمت چاپ‌شده (تومان)" hint="قیمت چاپ‌شده روی بسته">
+   378→                        <input
+   379→                          type="number" inputMode="decimal" min={0} step="any"
+   380→                          value={row.printed}
+   381→                          onChange={(e) => upd(it.id, { printed: e.target.value })}
+   382→                          className={inputCls}
+   383→                        />
+   384→                      </Field>
+   385→                    ) : (
+   386→                      <Field label="قیمت نهایی واحد (تومان)" hint="پیش‌فرض: قیمت چاپ‌شده / قیمت خرید">
+   387→                        <input
+   388→                          type="number" inputMode="decimal" min={0} step="any"
+   389→                          value={row.final}
+   390→                          onChange={(e) => upd(it.id, { final: e.target.value })}
+   391→                          className={inputCls}
+   392→                        />
+   393→                      </Field>
+   394→                    )}
+   395→                  </div>
+   396→
+   397→                  {/* status toggles */}
+   398→                  <div className="mt-3 grid grid-cols-3 gap-2">
+   399→                    {STATUS_OPTS.map((o) => (
+   400→                      <button
+   401→                        key={o.v} type="button"
+   402→                        onClick={() => upd(it.id, { status: o.v })}
+   403→                        aria-pressed={row.status === o.v}
+   404→                        className={cn(
+   405→                          'min-h-[44px] rounded-xl border-2 px-2 text-sm font-bold transition-all active:scale-[0.98]',
+   406→                          row.status === o.v ? o.activeCls : o.idleCls
+   407→                        )}
+   408→                      >
+   409→                        {o.label}
+   410→                      </button>
+   411→                    ))}
+   412→                  </div>
+   413→
+   414→                  {/* note when MISSING / REJECTED */}
+   415→                  {row.status !== 'OK' && (
+   416→                    <div className="mt-3">
+   417→                      <Field label="توضیح" hint="دلیل ناقص یا مردود بودن را بنویسید">
+   418→                        <input
+   419→                          value={row.note}
+   420→                          onChange={(e) => upd(it.id, { note: e.target.value })}
+   421→                          placeholder="مثلاً: ۲ عدد شکسته بود"
+   422→                          className={inputCls}
+   423→                        />
+   424→                      </Field>
+   425→                    </div>
+   426→                  )}
+   427→
+   428→                  {/* add barcode */}
+   429→                  <div className="mt-3">
+   430→                    {barcodeFor === it.id ? (
+   431→                      <div className="flex flex-col gap-2 sm:flex-row">
+   432→                        <input
+   433→                          autoFocus
+   434→                          value={barcodeVal}
+   435→                          onChange={(e) => setBarcodeVal(e.target.value)}
+   436→                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveBarcode(it.id) } }}
+   437→                          placeholder="بارکد جدید را اسکن/وارد کنید…"
+   438→                          dir="ltr"
+   439→                          className={cn(inputCls, 'font-mono')}
+   440→                        />
+   441→                        <div className="flex gap-2">
+   442→                          <PrimaryButton type="button" className="min-h-[44px] flex-1" onClick={() => saveBarcode(it.id)}>ذخیره بارکد</PrimaryButton>
+   443→                          <GhostButton type="button" className="min-h-[44px]" onClick={() => { setBarcodeFor(null); setBarcodeVal('') }}>لغو</GhostButton>
+   444→                        </div>
+   445→                      </div>
+   446→                    ) : (
+   447→                      <GhostButton type="button" className="min-h-[44px] w-full sm:w-auto" onClick={() => { setBarcodeFor(it.id); setBarcodeVal('') }}>
+   448→                        افزودن بارکد
+   449→                      </GhostButton>
+   450→                    )}
+   451→                  </div>
+   452→                </Card>
+   453→              )
+   454→            })}
+   455→          </div>
+   456→
+   457→          {/* ---- recalc footer ---- */}
+   458→          <Card className="border-[#EAD9A8] bg-gradient-to-br from-[#FFFDF5] to-[#FBF3DC] p-4">
+   459→            <div className="grid grid-cols-3 gap-2 text-center">
+   460→              <div>
+   461→                <div className="text-[11px] text-[#8A6508]">جمع اقلام</div>
+   462→                <div className="text-sm font-bold tabular-nums text-[#253A2A]">{fmtMoney(totals.subtotal)}</div>
+   463→              </div>
+   464→              <div>
+   465→                <div className="text-[11px] text-[#8A6508]">مالیات بر ارزش افزوده (۹٪)</div>
+   466→                <div className="text-sm font-bold tabular-nums text-[#253A2A]">{fmtMoney(totals.vat)}</div>
+   467→              </div>
+   468→              <div>
+   469→                <div className="text-[11px] text-[#8A6508]">جمع کل</div>
+   470→                <div className="text-sm font-extrabold tabular-nums text-[#3E6B4A]">{fmtMoney(totals.total)}</div>
+   471→              </div>
+   472→            </div>
+   473→            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[#EFE0B8] pt-3">
+   474→              <span
+   475→                className={cn(
+   476→                  'inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-bold',
+   477→                  smallDelta ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-300 bg-amber-50 text-amber-800'
+   478→                )}
+   479→              >
+   480→                {smallDelta
+   481→                  ? '✓ اختلاف جزئی قابل قبول'
+   482→                  : `اختلاف با سفارش اصلی: ${delta > 0 ? '+' : '−'}${fmtMoney(Math.abs(delta))}`}
+   483→              </span>
+   484→              <span className="text-[11px] text-[#8A9884]">مبدا مقایسه: جمع ثبت‌شده سفارش ({fmtMoney(order.total)})</span>
+   485→            </div>
+   486→            <PrimaryButton className="mt-3 min-h-[48px] w-full text-base" onClick={submit} disabled={saving}>
+   487→              {saving
+   488→                ? 'در حال ثبت…'
+   489→                : mode === 'receive'
+   490→                  ? 'ثبت دریافت تحویل'
+   491→                  : 'ثبت تایید نهایی انبار'}
+   492→            </PrimaryButton>
+   493→          </Card>
+   494→        </div>
+   495→      )}
+   496→    </Modal>
+   497→  )
+   498→}
+   499→
+   500→/* =============== scan-in bar (closes the printed → scanned loop) =============== */
+   501→
+   502→type ScanOutcome = { kind: 'ok' | 'warn' | 'err'; text: string }
+   503→type CamStatus = 'starting' | 'live' | 'unsupported' | 'unavailable'
+   504→
+   505→const SCAN_RECENT_KEY = 'hz_scan_recent'
+   506→
+   507→function readRecentCodes(): string[] {
+   508→  try {
+   509→    const raw = window.sessionStorage.getItem(SCAN_RECENT_KEY)
+   510→    const arr = raw ? JSON.parse(raw) : []
+   511→    return Array.isArray(arr) ? arr.filter((c) => typeof c === 'string').slice(0, 3) : []
+   512→  } catch {
+   513→    return []
+   514→  }
+   515→}
+   516→
+   517→function writeRecentCodes(codes: string[]) {
+   518→  try {
+   519→    window.sessionStorage.setItem(SCAN_RECENT_KEY, JSON.stringify(codes.slice(0, 3)))
+   520→  } catch {
+   521→    /* private mode etc. */
+   522→  }
+   523→}
+   524→
+   525→/**
+   526→ * Gold/olive scan bar at the top of Deliveries. Barcode scanners behave like
+   527→ * keyboards and send Enter after the code, so the input submits on Enter;
+   528→ * a gold button covers manual entry. Outcomes come from the parent's
+   529→ * `resolve` (match → open detail, order-without-delivery → hint, unknown →
+   530→ * error + shake). Keeps the last 3 resolved codes as re-open chips (persisted
+   531→ * in sessionStorage so the trail survives the detail open/close round-trip).
+   532→ */
+   533→function ScanBar({ resolve }: { resolve: (rawCode: string) => Promise<ScanOutcome> }) {
+   534→  const [value, setValue] = React.useState('')
+   535→  const [outcome, setOutcome] = React.useState<ScanOutcome | null>(null)
+   536→  const [looking, setLooking] = React.useState(false)
+   537→  const [shaking, setShaking] = React.useState(false)
+   538→  const [recent, setRecent] = React.useState<string[]>([])   // hydrated after mount (SSR-safe)
+   539→  const [muted, setMuted] = React.useState(false)            // default ON; synced from storage after mount
+   540→  const [camOpen, setCamOpen] = React.useState(false)        // camera-scan modal
+   541→  const [camLive, setCamLive] = React.useState(false)        // camera stream active → gold tint on button
+   542→  const recentRef = React.useRef<string[]>([])               // mirror — survives unmount-timing races
+   543→  const inputRef = React.useRef<HTMLInputElement>(null)
+   544→  const hideTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+   545→  const shakeTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+   546→
+   547→  React.useEffect(() => {
+   548→    const saved = readRecentCodes()
+   549→    recentRef.current = saved
+   550→    setRecent(saved)
+   551→    setMuted(isScanMuted())
+   552→    return () => {
+   553→      if (hideTimer.current) clearTimeout(hideTimer.current)
+   554→      if (shakeTimer.current) clearTimeout(shakeTimer.current)
+   555→    }
+   556→  }, [])
+   557→
+   558→  /** record a resolved code — writes storage imperatively first, because a
+   559→   * successful resolve may unmount this bar in the same commit (detail opens)
+   560→   * and React discards pending updates (never running updater side-effects). */
+   561→  const addRecent = (code: string) => {
+   562→    const next = [code, ...recentRef.current.filter((c) => c !== code)].slice(0, 3)
+   563→    recentRef.current = next
+   564→    writeRecentCodes(next)
+   565→    setRecent(next)
+   566→  }
+   567→
+   568→  const submit = async (rawOverride?: string) => {
+   569→    if (looking) return
+   570→    const code = normalizeOrderCode(rawOverride ?? value)
+   571→    if (!code) return // empty input → ignore silently
+   572→    if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null }
+   573→    setOutcome(null)
+   574→    setLooking(true)
+   575→    try {
+   576→      const res = await resolve(code)
+   577→      setOutcome(res)
+   578→      // sound + haptics feedback (muted flag respected inside scan-feedback)
+   579→      if (res.kind === 'err') playScanErr()
+   580→      else if (res.kind === 'warn') playScanWarn()
+   581→      else playScanOk()
+   582→      if (res.kind === 'err') {
+   583→        // miss → shake + keep the input focused for the next scan
+   584→        setShaking(false)
+   585→        if (shakeTimer.current) clearTimeout(shakeTimer.current)
+   586→        shakeTimer.current = setTimeout(() => setShaking(false), 520)
+   587→        requestAnimationFrame(() => setShaking(true))
+   588→        inputRef.current?.focus()
+   589→      } else {
+   590→        addRecent(code)
+   591→        if (res.kind === 'warn') inputRef.current?.focus()
+   592→        if (res.kind === 'ok') {
+   593→          hideTimer.current = setTimeout(() => setOutcome(null), 6000)
+   594→        }
+   595→      }
+   596→    } finally {
+   597→      setLooking(false)
+   598→      setValue('')
+   599→    }
+   600→  }
+   601→
+   602→  /* keep a fresh submit reference for stable camera callbacks (the modal's
+   603→   * effect deps must never change identity, or the stream would restart) */
+   604→  const submitRef = React.useRef(submit)
+   605→  React.useEffect(() => { submitRef.current = submit })
+   606→
+   607→  const handleCamCode = React.useCallback((raw: string) => {
+   608→    setCamOpen(false)
+   609→    setCamLive(false)
+   610→    void submitRef.current(raw) // same resolve() flow as manual submit
+   611→  }, [])
+   612→  const handleCamClose = React.useCallback(() => {
+   613→    setCamOpen(false)
+   614→    setCamLive(false)
+   615→  }, [])
+   616→  const handleCamStatus = React.useCallback((s: CamStatus) => setCamLive(s === 'live'), [])
+   617→
+   618→  return (
+   619→    <>
+   620→      <section
+   621→      aria-label="اسکن بارکد تحویل"
+   622→      className={cn(
+   623→        'relative mb-4 overflow-hidden rounded-2xl border border-[#EAD9A8] bg-gradient-to-l from-[#F3F7EF] via-[#FBF9F3] to-[#FFFDF5] p-4 shadow-[0_2px_14px_-4px_rgba(90,74,32,0.14)]',
+   624→        shaking && 'pz-shake'
+   625→      )}
+   626→    >
+   627→      {/* header: title + hint + example legend */}
+   628→      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+   629→        <div className="flex items-center gap-2.5">
+   630→          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#B8860B] to-[#DAA520] text-white shadow-md shadow-amber-700/20">
+   631→            <ScanLine size={20} />
+   632→          </span>
+   633→          <div>
+   634→            <div className="text-sm font-extrabold text-[#253A2A]">اسکن تحویل | Scan-in</div>
+   635→            <div className="text-[11px] text-[#8A9884]">بارکد حک‌شده روی چاپ سفارش را اسکن کنید</div>
+   636→          </div>
+   637→        </div>
+   638→        <div className="flex flex-wrap items-center gap-2">
+   639→          {/* mute toggle — sound + haptics feedback, persisted in localStorage */}
+   640→          <button
+   641→            type="button"
+   642→            onClick={() => {
+   643→              const next = !muted
+   644→              setMuted(next)
+   645→              setScanMuted(next)
+   646→              if (!next) primeScanAudio()
+   647→            }}
+   648→            aria-pressed={!muted}
+   649→            aria-label={muted ? 'صدای اسکن خاموش است — برای وصل کردن کلیک کنید' : 'صدای اسکن روشن است — برای قطع کردن کلیک کنید'}
+   650→            title={muted ? 'صدای اسکن خاموش است — برای وصل کردن کلیک کنید' : 'صدای اسکن روشن است — برای قطع کردن کلیک کنید'}
+   651→            className={cn(
+   652→              'inline-flex min-h-[38px] items-center gap-1.5 rounded-full border px-3 text-[11px] font-bold transition-all active:scale-95',
+   653→              muted
+   654→                ? 'border-stone-300 bg-stone-100 text-stone-500'
+   655→                : 'border-[#CBDCC4] bg-[#F3F7EF] text-[#4A5A44] hover:border-[#DAA520] hover:text-[#8A6508]',
+   656→            )}
+   657→          >
+   658→            {muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+   659→            {muted ? 'صدا خاموش' : 'صدا روشن'}
+   660→          </button>
+   661→          <Badge className="pz-barcode border-[#EAD9A8] bg-[#FFFDF5] text-[11px] text-[#8A6508]">مثال: HZ-1005</Badge>
+   662→        </div>
+   663→      </div>
+   664→
+   665→      {/* input row: scanner line + icon + LTR mono input + submit button */}
+   666→      <div className="flex flex-col gap-2 sm:flex-row">
+   667→        <div
+   668→          className={cn(
+   669→            'relative flex-1 rounded-xl border border-[#E4DCC8] bg-white transition-all',
+   670→            'focus-within:border-[#DAA520] focus-within:shadow-[0_0_0_4px_rgba(218,165,32,0.16)]'
+   671→          )}
+   672→        >
+   673→          <span aria-hidden className="pz-scanline left-1.5" />
+   674→          <ScanLine size={18} className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-[#B8860B]/70" aria-hidden />
+   675→          <input
+   676→            ref={inputRef}
+   677→            value={value}
+   678→            onChange={(e) => setValue(e.target.value)}
+   679→            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void submit() } }}
+   680→            placeholder="کد سفارش را اسکن یا وارد کنید… | Scan order code"
+   681→            dir="ltr"
+   682→            aria-label="کد سفارش را اسکن یا وارد کنید"
+   683→            autoComplete="off"
+   684→            autoCapitalize="characters"
+   685→            spellCheck={false}
+   686→            className="h-12 min-h-[48px] w-full bg-transparent pl-12 pr-4 pz-barcode text-base font-bold tracking-widest text-[#253A2A] outline-none placeholder:font-sans placeholder:text-sm placeholder:font-normal placeholder:tracking-normal placeholder:text-[#A8A28C]"
+   687→          />
+   688→        </div>
+   689→        {/* camera scan — BarcodeDetector API with graceful fallback */}
+   690→        <button
+   691→          type="button"
+   692→          onClick={() => { primeScanAudio(); setCamOpen(true) }}
+   693→          aria-label="اسکن با دوربین"
+   694→          title="اسکن با دوربین"
+   695→          className={cn(
+   696→            'flex h-12 min-h-[48px] w-full shrink-0 items-center justify-center gap-2 rounded-xl border text-sm font-bold transition-all active:scale-95 sm:w-12',
+   697→            camLive
+   698→              ? 'border-[#DAA520] bg-[#FFFDF5] text-[#B8860B] shadow-[0_0_0_3px_rgba(218,165,32,0.18)]'
+   699→              : 'border-[#E4DCC8] bg-white text-[#4A5A44] hover:border-[#DAA520] hover:bg-[#FFFDF5] hover:text-[#8A6508]',
+   700→          )}
+   701→        >
+   702→          <Camera size={19} />
+   703→          <span className="sm:hidden">دوربین</span>
+   704→        </button>
+   705→        <GoldButton
+   706→          type="button"
+   707→          onClick={() => void submit()}
+   708→          disabled={looking}
+   709→          className="min-h-[48px] shrink-0 px-5"
+   710→        >
+   711→          {looking ? <Spinner /> : <ScanLine size={17} />} باز کردن
+   712→        </GoldButton>
+   713→      </div>
+   714→
+   715→      {/* outcome banners */}
+   716→      {outcome?.kind === 'ok' && (
+   717→        <div role="status" className="mt-2.5 flex items-center gap-2 rounded-xl border border-[#EAD9A8] bg-[#FFFDF5] px-3 py-2.5 text-sm font-bold text-[#8A6508]">
+   718→          <CheckCircle2 size={17} className="shrink-0" />
+   719→          <span>{outcome.text}</span>
+   720→        </div>
+   721→      )}
+   722→      {outcome?.kind === 'warn' && (
+   723→        <div role="status" className="mt-2.5 flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm font-bold text-amber-800">
+   724→          <AlertTriangle size={17} className="shrink-0" />
+   725→          <span>{outcome.text}</span>
+   726→        </div>
+   727→      )}
+   728→      {outcome?.kind === 'err' && (
+   729→        <div role="alert" className="mt-2.5 flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm font-bold text-rose-700">
+   730→          <XCircle size={17} className="shrink-0" />
+   731→          <span>{outcome.text}</span>
+   732→        </div>
+   733→      )}
+   734→
+   735→      {/* recently scanned trail (click = re-open) */}
+   736→      {recent.length > 0 && (
+   737→        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+   738→          <span className="text-[11px] font-semibold text-[#8A9884]">اسکن‌های اخیر:</span>
+   739→          {recent.map((c) => (
+   740→            <button
+   741→              key={c}
+   742→              type="button"
+   743→              onClick={() => void submit(c)}
+   744→              aria-label={`باز کردن مجدد ${c}`}
+   745→              className="pz-barcode inline-flex min-h-[44px] items-center rounded-full border border-[#E4DCC8] bg-white px-3 py-1 text-xs font-bold tracking-wider text-[#4A5A44] transition-all hover:border-[#DAA520] hover:bg-[#FFFDF5] hover:text-[#8A6508] active:scale-[0.97]"
+   746→            >
+   747→              {c}
+   748→            </button>
+   749→          ))}
+   750→        </div>
+   751→      )}
+   752→    </section>
+   753→    {/* camera-scan modal lives OUTSIDE the section (the section animates
+   754→     * transform on pz-shake, which would trap position:fixed children) */}
+   755→    <ScanCameraModal open={camOpen} onClose={handleCamClose} onCode={handleCamCode} onStatusChange={handleCamStatus} />
+   756→    </>
+   757→  )
+   758→}
+   759→
+   760→/* =============== camera scan modal (BarcodeDetector + graceful fallback) =============== */
+   761→
+   762→/**
+   763→ * Full-screen camera viewfinder for order-barcode scanning.
+   764→ * - Feature detection first: no BarcodeDetector / no getUserMedia → «unsupported»
+   765→ *   fallback (browser can't do it). getUserMedia failure (denied / no device /
+   766→ *   busy / insecure context) → «unavailable» fallback with a specific hint.
+   767→ * - Live path: environment-facing stream in a premium viewfinder (gold corner
+   768→ *   brackets, pz-cam-beam sweep), code_39 polled ~250 ms; a read is accepted
+   769→ *   only when the same raw value appears twice in a row (dedupeRead) →
+   770→ *   stop stream → onCode(rawValue) → the ScanBar runs its normal resolve().
+   771→ * - All tracks stop on close, on tab-hide (visibilitychange) and on unmount.
+   772→ */
+   773→function ScanCameraModal({ open, onClose, onCode, onStatusChange }: {
+   774→  open: boolean
+   775→  onClose: () => void
+   776→  onCode: (raw: string) => void
+   777→  onStatusChange?: (status: CamStatus) => void
+   778→}) {
+   779→  const videoRef = React.useRef<HTMLVideoElement | null>(null)
+   780→  const streamRef = React.useRef<MediaStream | null>(null)
+   781→  const [status, setStatus] = React.useState<CamStatus>('starting')
+   782→  const [errHint, setErrHint] = React.useState('')
+   783→
+   784→  const stopStream = React.useCallback(() => {
+   785→    const st = streamRef.current
+   786→    if (!st) return
+   787→    for (const t of st.getTracks()) t.stop()
+   788→    streamRef.current = null
+   789→  }, [])
+   790→
+   791→  React.useEffect(() => {
+   792→    if (!open) return
+   793→    let cancelled = false
+   794→    let timer: ReturnType<typeof setInterval> | null = null
+   795→
+   796→    const apply = (s: CamStatus) => {
+   797→      setStatus(s)
+   798→      onStatusChange?.(s)
+   799→    }
+   800→
+   801→    /** first stable read → stop everything, hand the raw code to the bar */
+   802→    const finish = (raw: string) => {
+   803→      cancelled = true
+   804→      if (timer) { clearInterval(timer); timer = null }
+   805→      stopStream()
+   806→      onCode(raw)
+   807→    }
+   808→
+   809→    const start = async () => {
+   810→      apply('starting')
+   811→      setErrHint('')
+   812→      const Ctor = window.BarcodeDetector
+   813→      if (!Ctor || !navigator.mediaDevices?.getUserMedia) {
+   814→        apply('unsupported')
+   815→        return
+   816→      }
+   817→      try {
+   818→        const stream = await navigator.mediaDevices.getUserMedia({
+   819→          video: { facingMode: 'environment' },
+   820→          audio: false,
+   821→        })
+   822→        if (cancelled) {
+   823→          for (const t of stream.getTracks()) t.stop()
+   824→          return
+   825→        }
+   826→        streamRef.current = stream
+   827→        const v = videoRef.current
+   828→        if (v) {
+   829→          v.srcObject = stream
+   830→          try { await v.play() } catch { /* muted+playsInline usually autoplay fine */ }
+   831→        }
+   832→        const detector = new Ctor({ formats: ['code_39'] })
+   833→        apply('live')
+   834→        let last = ''
+   835→        timer = setInterval(() => {
+   836→          if (cancelled) return
+   837→          const vid = videoRef.current
+   838→          if (!vid || vid.readyState < 2 || vid.videoWidth === 0) return
+   839→          detector.detect(vid)
+   840→            .then((hits) => {
+   841→              if (cancelled) return
+   842→              const raw = hits && hits.length > 0 && hits[0]?.rawValue ? String(hits[0].rawValue) : ''
+   843→              if (!raw) return
+   844→              const d = dedupeRead(last, raw)
+   845→              last = d.last
+   846→              if (d.accept) finish(raw)
+   847→            })
+   848→            .catch(() => { /* transient decode failure — keep polling */ })
+   849→        }, 250)
+   850→      } catch (e) {
+   851→        if (cancelled) return
+   852→        const name = e instanceof DOMException ? e.name : ''
+   853→        if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
+   854→          setErrHint('دسترسی به دوربین رد شد. لطفاً از نوار آدرس مرورگر اجازه دوربین را برای این صفحه فعال کنید.')
+   855→        } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError' || name === 'OverconstrainedError') {
+   856→          setErrHint('دوربینی روی این دستگاه پیدا نشد.')
+   857→        } else if (name === 'NotReadableError' || name === 'TrackStartError' || name === 'AbortError') {
+   858→          setErrHint('دوربین در دسترس نیست — احتمالاً برنامه دیگری آن را در حال استفاده است.')
+   859→        } else {
+   860→          setErrHint('باز کردن دوربین ممکن نشد — این قابلیت به محیط امن (HTTPS) نیاز دارد.')
+   861→        }
+   862→        apply('unavailable')
+   863→      }
+   864→    }
+   865→
+   866→    void start()
+   867→
+   868→    // extra safety: stop the camera when the tab is hidden or Escape pressed
+   869→    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') onClose() }
+   870→    const onVis = () => { if (document.hidden) onClose() }
+   871→    document.addEventListener('keydown', onKey)
+   872→    document.addEventListener('visibilitychange', onVis)
+   873→
+   874→    return () => {
+   875→      cancelled = true
+   876→      if (timer) { clearInterval(timer); timer = null }
+   877→      document.removeEventListener('keydown', onKey)
+   878→      document.removeEventListener('visibilitychange', onVis)
+   879→      stopStream()
+   880→    }
+   881→  }, [open, onClose, onCode, onStatusChange, stopStream])
+   882→
+   883→  if (!open) return null
+   884→
+   885→  const fallback = status === 'unsupported' || status === 'unavailable'
+   886→
+   887→  return (
+   888→    <div
+   889→      dir="rtl"
+   890→      role="dialog"
+   891→      aria-modal="true"
+   892→      aria-label="اسکن بارکد سفارش با دوربین"
+   893→      className="fixed inset-0 z-[60] flex flex-col bg-[#0E120C]/80 backdrop-blur-md"
+   894→    >
+   895→      {/* header */}
+   896→      <div className="flex items-center justify-between gap-2 px-4 pt-4">
+   897→        <div className="flex items-center gap-2 text-[#F3E7C4]">
+   898→          <Camera size={18} />
+   899→          <span className="text-sm font-bold">اسکن با دوربین</span>
+   900→        </div>
+   901→        <button
+   902→          type="button"
+   903→          onClick={onClose}
+   904→          aria-label="بستن دوربین"
+   905→          className="flex h-11 w-11 items-center justify-center rounded-full border border-[#DAA520]/40 bg-black/30 text-[#F3E7C4] transition hover:bg-black/50 active:scale-95"
+   906→        >
+   907→          <X size={20} />
+   908→        </button>
+   909→      </div>
+   910→
+   911→      <div className="flex min-h-0 flex-1 items-center justify-center px-4 pb-6">
+   912→        {fallback ? (
+   913→          /* graceful fallback: unsupported browser or unavailable camera */
+   914→          <div className="mx-auto flex w-full max-w-sm flex-col items-center gap-4 rounded-3xl border border-[#DAA520]/30 bg-[#1B221A]/90 p-6 text-center shadow-2xl">
+   915→            <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-rose-400/30 bg-rose-500/10 text-rose-300">
+   916→              <CameraOff size={26} />
+   917→            </span>
+   918→            <div className="text-base font-extrabold text-[#F3E7C4]">
+   919→              {status === 'unsupported' ? 'مرورگر شما از اسکن دوربینی پشتیبانی نمی‌کند' : 'دسترسی به دوربین ممکن نشد'}
+   920→            </div>
+   921→            <p className="text-sm leading-7 text-[#C9CDBD]">
+   922→              {status === 'unsupported'
+   923→                ? 'این مرورگر تشخیص خودکار بارکد ندارد. لطفاً کد سفارش را به‌صورت دستی وارد کنید یا از اسکنر فیزیکی استفاده کنید.'
+   924→                : `${errHint} می‌توانید کد سفارش را دستی وارد کنید.`}
+   925→            </p>
+   926→            <button
+   927→              type="button"
+   928→              onClick={onClose}
+   929→              className="min-h-[44px] rounded-xl border border-[#DAA520]/50 bg-[#DAA520]/15 px-5 text-sm font-bold text-[#F0D68A] transition hover:bg-[#DAA520]/25 active:scale-95"
+   930→            >
+   931→              بستن و ورود دستی کد
+   932→            </button>
+   933→          </div>
+   934→        ) : (
+   935→          /* live viewfinder (also holds the «starting» spinner until the stream flows) */
+   936→          <div className="relative h-[min(100%,540px)] max-h-full w-auto max-w-full aspect-[3/4] overflow-hidden rounded-3xl border border-[#DAA520]/30 bg-black shadow-2xl">
+   937→            <video
+   938→              ref={videoRef}
+   939→              playsInline
+   940→              muted
+   941→              autoPlay
+   942→              className={cn('absolute inset-0 h-full w-full object-cover', status !== 'live' && 'opacity-0')}
+   943→            />
+   944→            {status !== 'live' && (
+   945→              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black text-sm font-semibold text-[#D8D2BC]">
+   946→                <Spinner />
+   947→                <span>در حال باز کردن دوربین…</span>
+   948→              </div>
+   949→            )}
+   950→            {status === 'live' && (
+   951→              <div className="pointer-events-none absolute left-1/2 top-1/2 h-[64%] w-[82%] -translate-x-1/2 -translate-y-1/2">
+   952→                {/* dim everything outside the viewport frame */}
+   953→                <div className="absolute inset-0 rounded-2xl shadow-[0_0_0_9999px_rgba(8,12,8,0.55)] ring-1 ring-[#DAA520]/35" />
+   954→                {/* 4 gold corner brackets with a subtle glow */}
+   955→                <span className="absolute -left-1 -top-1 h-8 w-8 rounded-tl-2xl border-l-[3px] border-t-[3px] border-[#E8C24A] shadow-[0_0_8px_rgba(218,165,32,0.65)]" />
+   956→                <span className="absolute -right-1 -top-1 h-8 w-8 rounded-tr-2xl border-r-[3px] border-t-[3px] border-[#E8C24A] shadow-[0_0_8px_rgba(218,165,32,0.65)]" />
+   957→                <span className="absolute -bottom-1 -left-1 h-8 w-8 rounded-bl-2xl border-b-[3px] border-l-[3px] border-[#E8C24A] shadow-[0_0_8px_rgba(218,165,32,0.65)]" />
+   958→                <span className="absolute -bottom-1 -right-1 h-8 w-8 rounded-br-2xl border-b-[3px] border-r-[3px] border-[#E8C24A] shadow-[0_0_8px_rgba(218,165,32,0.65)]" />
+   959→                {/* sweeping gold beam (pz-cam-beam — reduced-motion safe) */}
+   960→                <div className="pz-cam-beam" aria-hidden />
+   961→                <div className="absolute inset-x-0 -bottom-9 text-center text-xs font-semibold text-[#EFE3C2]/90">
+   962→                  بارکد سفارش را داخل کادر قرار دهید
+   963→                </div>
+   964→              </div>
+   965→            )}
+   966→          </div>
+   967→        )}
+   968→      </div>
+   969→    </div>
+   970→  )
+   971→}
+   972→
+   973→/* =============== main section =============== */
+   974→
+   975→export default function DeliveriesSection({ user }: { user: PUser }) {
+   976→  const openOrder = useApp((s) => s.openOrder)
+   977→
+   978→  const hasReceive = hasRole(user, 'DELIVERY_RECEIVER') || hasRole(user, 'INVENTORY_SUPERVISOR')
+   979→  const hasConfirm = hasRole(user, 'INVENTORY_SUPERVISOR')
+   980→  const isManager = hasRole(user, 'GENERAL_MANAGER') || hasRole(user, 'OPERATION_MANAGER')
+   981→    || hasRole(user, 'ACCOUNTANT') || hasRole(user, 'PRODUCT_MANAGER')
+   982→
+   983→  const [tab, setTab] = React.useState<string>(() =>
+   984→    hasConfirm ? 'confirm' : hasRole(user, 'DELIVERY_RECEIVER') ? 'receive' : 'overview')
+   985→
+   986→  const [loading, setLoading] = React.useState(true)
+   987→  const [approved, setApproved] = React.useState<ListOrder[]>([])
+   988→  const [received, setReceived] = React.useState<ListOrder[]>([])
+   989→  const [confirmed, setConfirmed] = React.useState<ListOrder[]>([])
+   990→  const [done, setDone] = React.useState<ListOrder[]>([])
+   991→  const [holidays, setHolidays] = React.useState<Record<string, string>>({})
+   992→  const [sheet, setSheet] = React.useState<{ id: number; mode: SheetMode } | null>(null)
+   993→
+   994→  const load = React.useCallback(async () => {
+   995→    setLoading(true)
+   996→    try {
+   997→      const [a, r, c, d, h] = await Promise.all([
+   998→        api.get<{ orders: ListOrder[] }>('/api/orders?status=APPROVED'),
+   999→        api.get<{ orders: ListOrder[] }>('/api/orders?status=RECEIVED'),
+  1000→        api.get<{ orders: ListOrder[] }>('/api/orders?status=CONFIRMED'),
+  1001→        api.get<{ orders: ListOrder[] }>('/api/orders?status=DONE'),
+  1002→        api.get<{ holidays: { date: string; title: string }[] }>('/api/holidays'),
+  1003→      ])
+  1004→      setApproved(a.orders)
+  1005→      setReceived(r.orders)
+  1006→      setConfirmed(c.orders)
+  1007→      setDone(d.orders)
+  1008→      setHolidays(Object.fromEntries(h.holidays.map((x) => [x.date, x.title])))
+  1009→    } catch {
+  1010→      toast.error('خطا در بارگذاری داده‌ها')
+  1011→    } finally {
+  1012→      setLoading(false)
+  1013→    }
+  1014→  }, [])
+  1015→
+  1016→  React.useEffect(() => { load() }, [load])
+  1017→
+  1018→  const closeSheet = React.useCallback(() => setSheet(null), [])
+  1019→  const afterSheet = React.useCallback(() => { load() }, [load])
+  1020→
+  1021→  const today = todayISO()
+  1022→  const todayHoliday = holidays[today]
+  1023→
+  1024→  const tabs = [
+  1025→    ...(hasReceive ? [{ key: 'receive', label: 'دریافت تحویل', icon: <PackageCheck size={16} /> }] : []),
+  1026→    ...(hasConfirm ? [{ key: 'confirm', label: 'تایید انبار', icon: <ClipboardCheck size={16} /> }] : []),
+  1027→    ...(isManager ? [
+  1028→      { key: 'overview', label: 'نمای کلی', icon: <LayoutGrid size={16} /> },
+  1029→      { key: 'history', label: 'تاریخچه', icon: <History size={16} /> },
+  1030→    ] : []),
+  1031→  ]
+  1032→
+  1033→  const active = React.useMemo(
+  1034→    () => [...approved, ...received, ...confirmed].sort((a, b) => (a.receivingDate < b.receivingDate ? -1 : 1)),
+  1035→    [approved, received, confirmed]
+  1036→  )
+  1037→  const isOverdue = (o: ListOrder) => o.receivingDate.slice(0, 10) < today && o.status === 'APPROVED'
+  1038→
+  1039→  const openAction = (o: ListOrder) => {
+  1040→    if (o.status === 'APPROVED' && hasReceive) setSheet({ id: o.id, mode: 'receive' })
+  1041→    else if (o.status === 'RECEIVED' && hasConfirm) setSheet({ id: o.id, mode: 'confirm' })
+  1042→    else openOrder(o.id)
+  1043→  }
+  1044→
+  1045→  /* ---- scan-in resolution: printed Code39 (HZ-xxxx) → delivery detail ---- */
+  1046→  const resolveScan = async (rawCode: string): Promise<ScanOutcome> => {
+  1047→    const code = normalizeOrderCode(rawCode)
+  1048→    if (!code) return { kind: 'warn', text: '' }
+  1049→
+  1050→    // 1) already-loaded delivery lists (fast path)
+  1051→    const hit = [...approved, ...received, ...confirmed].find((o) => o.code === code)
+  1052→    if (hit) {
+  1053→      toast.success(`تحویل ${code} پیدا شد — باز شد ✓`)
+  1054→      openAction(hit)
+  1055→      return { kind: 'ok', text: `تحویل ${code} پیدا شد — باز شد ✓` }
+  1056→    }
+  1057→    const closed = done.find((o) => o.code === code)
+  1058→    if (closed) {
+  1059→      openOrder(closed.id)
+  1060→      toast.info(`سفارش ${code} قبلاً تحویل داده شده و بسته شده — برای مشاهده باز شد`)
+  1061→      return { kind: 'warn', text: `سفارش ${code} قبلاً تحویل داده شده و بسته شده — برای مشاهده باز شد` }
+  1062→    }
+  1063→
+  1064→    // 2) fresh lookup (covers stale lists + orders that never reached the delivery stage)
+  1065→    try {
+  1066→      const res = await api.get<{ orders: ListOrder[] }>(`/api/orders?code=${encodeURIComponent(code)}`)
+  1067→      const ord = res.orders?.[0]
+  1068→      if (!ord) return { kind: 'err', text: `کد سفارش یافت نشد: ${code}` }
+  1069→      if (ord.status === 'APPROVED' || ord.status === 'RECEIVED' || ord.status === 'CONFIRMED') {
+  1070→        toast.success(`تحویل ${code} پیدا شد — باز شد ✓`)
+  1071→        openAction(ord)
+  1072→        return { kind: 'ok', text: `تحویل ${code} پیدا شد — باز شد ✓` }
+  1073→      }
+  1074→      if (ord.status === 'DONE') {
+  1075→        openOrder(ord.id)
+  1076→        toast.info(`سفارش ${code} قبلاً تحویل داده شده و بسته شده — برای مشاهده باز شد`)
+  1077→        return { kind: 'warn', text: `سفارش ${code} قبلاً تحویل داده شده و بسته شده — برای مشاهده باز شد` }
+  1078→      }
+  1079→      if (ord.status === 'CANCELLED') {
+  1080→        toast.info(`سفارش ${code} لغو شده است و تحویلی ندارد`)
+  1081→        return { kind: 'warn', text: `سفارش ${code} لغو شده است و تحویلی ندارد` }
+  1082→      }
+  1083→      return { kind: 'warn', text: `سفارش ${code} هنوز تحویلی ثبت نشده` }
+  1084→    } catch {
+  1085→      return { kind: 'err', text: `خطا در بررسی کد — دوباره تلاش کنید: ${code}` }
+  1086→    }
+  1087→  }
+  1088→
+  1089→  return (
+  1090→    <div>
+  1091→      <SectionHeader
+  1092→        title="دریافت و انبار | Deliveries"
+  1093→        subtitle="تحویل سفارش‌های تامین‌کننده و تایید نهایی انبار"
+  1094→        icon={<Truck size={20} />}
+  1095→      />
+  1096→
+  1097→      {/* scan-in bar (closes the printed → scanned loop) */}
+  1098→      {tabs.length > 0 && <ScanBar resolve={resolveScan} />}
+  1099→
+  1100→      {/* holiday banner */}
+  1101→      {todayHoliday && (
+  1102→        <div className="mb-4 flex items-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+  1103→          <AlertTriangle size={18} className="shrink-0" />
+  1104→          امروز تعطیل است: {todayHoliday}
+  1105→        </div>
+  1106→      )}
+  1107→
+  1108→      {tabs.length > 0 && <Tabs tabs={tabs} active={tab} onChange={setTab} />}
+  1109→
+  1110→      {loading ? (
+  1111→        tab === 'history' ? (
+  1112→          <TableWrap>
+  1113→            <thead>
+  1114→              <tr>
+  1115→                <Th>کد سفارش</Th>
+  1116→                <Th>تامین‌کننده</Th>
+  1117→                <Th>مبلغ کل</Th>
+  1118→                <Th>تاریخ بستن</Th>
+  1119→                <Th className="text-left">عملیات</Th>
+  1120→              </tr>
+  1121→            </thead>
+  1122→            <TableRowsSkeleton rows={6} cols={5} widths={['w-20', 'w-28', 'w-20', 'w-24', 'w-16']} />
+  1123→          </TableWrap>
+  1124→        ) : (
+  1125→          <DeliveryGridSkeleton count={6} />
+  1126→        )
+  1127→      ) : tabs.length === 0 ? (
+  1128→        <EmptyState title="دسترسی‌ای برای این بخش ندارید" hint="این بخش برای گیرندگان تحویل، انباردار و مدیران است." />
+  1129→      ) : (
+  1130→        <>
+  1131→          {/* ================= RECEIVE TAB ================= */}
+  1132→          {tab === 'receive' && (
+  1133→            <div className="space-y-3">
+  1134→              {confirmed.length > 0 && (
+  1135→                <div className="rounded-2xl border border-[#EAD9A8] bg-[#FFFDF5] px-4 py-3 text-sm font-semibold text-[#8A6508]">
+  1136→                  {toFaDigits(confirmed.length)} سفارش تایید نهایی شده و آماده حسابداری است ✓
+  1137→                </div>
+  1138→              )}
+  1139→              {approved.length === 0 ? (
+  1140→                <EmptyState icon={<PackageCheck size={40} />} title="سفارشی برای دریافت تحویل نیست" hint="سفارش‌های تاییدشده مدیر اینجا نمایش داده می‌شوند." />
+  1141→              ) : (
+  1142→                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+  1143→                  {[...approved].sort((a, b) => (a.receivingDate < b.receivingDate ? -1 : 1)).map((o) => (
+  1144→                    <Card key={o.id} className={cn('p-4', isOverdue(o) && 'border-rose-300 bg-rose-50/50')}>
+  1145→                      <div className="flex items-start justify-between gap-2">
+  1146→                        <div className="min-w-0">
+  1147→                          <div className="text-base font-extrabold text-[#253A2A]">{o.code}</div>
+  1148→                          <div className="truncate text-xs text-[#6B7A66]">{o.supplier?.name ?? '—'}</div>
+  1149→                        </div>
+  1150→                        <StatusBadge status={o.status} />
+  1151→                      </div>
+  1152→                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#6B7A66]">
+  1153→                        <span>تحویل: <b>{fmtJalali(o.receivingDate)}</b></span>
+  1154→                        <span>{toFaDigits(o._count?.items ?? 0)} قلم</span>
+  1155→                        <Money value={o.total} className="text-xs" />
+  1156→                      </div>
+  1157→                      {isOverdue(o) && (
+  1158→                        <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-bold text-rose-700">
+  1159→                          <div className="flex items-center gap-1.5"><AlertTriangle size={14} /> سفارش معوق — به تامین‌کننده پیگیری شود</div>
+  1160→                        </div>
+  1161→                      )}
+  1162→                      <PrimaryButton className="mt-3 min-h-[44px] w-full" onClick={() => setSheet({ id: o.id, mode: 'receive' })}>
+  1163→                        دریافت تحویل
+  1164→                      </PrimaryButton>
+  1165→                    </Card>
+  1166→                  ))}
+  1167→                </div>
+  1168→              )}
+  1169→            </div>
+  1170→          )}
+  1171→
+  1172→          {/* ================= CONFIRM TAB ================= */}
+  1173→          {tab === 'confirm' && (
+  1174→            <div className="space-y-3">
+  1175→              {received.length === 0 ? (
+  1176→                <EmptyState icon={<ClipboardCheck size={40} />} title="سفارش دریافتی در انتظار تایید نیست" hint="سفارش‌هایی که گیرنده تحویل ثبت کرده اینجا برای تایید نهایی می‌آیند." />
+  1177→              ) : (
+  1178→                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+  1179→                  {received.map((o) => (
+  1180→                    <Card key={o.id} className="p-4">
+  1181→                      <div className="flex items-start justify-between gap-2">
+  1182→                        <div className="min-w-0">
+  1183→                          <div className="text-base font-extrabold text-[#253A2A]">{o.code}</div>
+  1184→                          <div className="truncate text-xs text-[#6B7A66]">{o.supplier?.name ?? '—'}</div>
+  1185→                        </div>
+  1186→                        <StatusBadge status={o.status} />
+  1187→                      </div>
+  1188→                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#6B7A66]">
+  1189→                        <span>تحویل: <b>{fmtJalali(o.receivingDate)}</b></span>
+  1190→                        <span>{toFaDigits(o._count?.items ?? 0)} قلم</span>
+  1191→                        <Money value={o.total} className="text-xs" />
+  1192→                      </div>
+  1193→                      <PrimaryButton className="mt-3 min-h-[44px] w-full" onClick={() => setSheet({ id: o.id, mode: 'confirm' })}>
+  1194→                        تایید نهایی انبار
+  1195→                      </PrimaryButton>
+  1196→                    </Card>
+  1197→                  ))}
+  1198→                </div>
+  1199→              )}
+  1200→            </div>
+  1201→          )}
+  1202→
+  1203→          {/* ================= OVERVIEW TAB ================= */}
+  1204→          {tab === 'overview' && (
+  1205→            <div className="space-y-4">
+  1206→              <div className="grid gap-3 sm:grid-cols-3">
+  1207→                <StatCard label="در انتظار دریافت" value={toFaDigits(approved.length)} sub="سفارش تاییدشده" icon={<Truck size={20} />} tone="gold" />
+  1208→                <StatCard label="دریافت‌شده" value={toFaDigits(received.length)} sub="منتظر تایید انبار" icon={<PackageCheck size={20} />} tone="olive" />
+  1209→                <StatCard label="آماده حسابداری" value={toFaDigits(confirmed.length)} sub="تایید نهایی شده" icon={<ClipboardCheck size={20} />} tone="sky" />
+  1210→              </div>
+  1211→              {active.length === 0 ? (
+  1212→                <EmptyState icon={<LayoutGrid size={40} />} title="سفارش فعالی وجود ندارد" />
+  1213→              ) : (
+  1214→                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+  1215→                  {active.map((o) => {
+  1216→                    const overdue = isOverdue(o)
+  1217→                    return (
+  1218→                      <Card key={o.id} className={cn('p-4', overdue && 'border-rose-300 bg-rose-50/50')}>
+  1219→                        <div className="flex items-start justify-between gap-2">
+  1220→                          <div className="min-w-0">
+  1221→                            <div className="text-base font-extrabold text-[#253A2A]">{o.code}</div>
+  1222→                            <div className="truncate text-xs text-[#6B7A66]">{o.supplier?.name ?? '—'}</div>
+  1223→                          </div>
+  1224→                          <StatusBadge status={o.status} />
+  1225→                        </div>
+  1226→                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#6B7A66]">
+  1227→                          <span>تحویل: <b>{fmtJalali(o.receivingDate)}</b></span>
+  1228→                          <span>{toFaDigits(o._count?.items ?? 0)} قلم</span>
+  1229→                          <Money value={o.total} className="text-xs" />
+  1230→                        </div>
+  1231→                        {overdue && (
+  1232→                          <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3">
+  1233→                            <div className="flex items-center gap-1.5 text-xs font-bold text-rose-700">
+  1234→                              <AlertTriangle size={14} /> سفارش معوق — به تامین‌کننده پیگیری شود
+  1235→                            </div>
+  1236→                            <GhostButton className="mt-2 min-h-[44px] w-full" onClick={() => openOrder(o.id)}>
+  1237→                              <Eye size={15} /> مشاهده جزئیات سفارش
+  1238→                            </GhostButton>
+  1239→                          </div>
+  1240→                        )}
+  1241→                        {!overdue && (
+  1242→                          <GhostButton className="mt-3 min-h-[44px] w-full" onClick={() => openAction(o)}>
+  1243→                            {o.status === 'APPROVED' && hasReceive ? 'دریافت تحویل'
+  1244→                              : o.status === 'RECEIVED' && hasConfirm ? 'تایید انبار'
+  1245→                                : <><Eye size={15} /> مشاهده سفارش</>}
+  1246→                          </GhostButton>
+  1247→                        )}
+  1248→                      </Card>
+  1249→                    )
+  1250→                  })}
+  1251→                </div>
+  1252→              )}
+  1253→            </div>
+  1254→          )}
+  1255→
+  1256→          {/* ================= HISTORY TAB ================= */}
+  1257→          {tab === 'history' && (
+  1258→            done.length === 0 ? (
+  1259→              <EmptyState icon={<History size={40} />} title="تاریخچه خالی است" hint="سفارش‌های بسته‌شده در حسابداری اینجا نمایش داده می‌شوند." />
+  1260→            ) : (
+  1261→              <div className="max-h-[70vh] overflow-y-auto pz-scroll">
+  1262→                <TableWrap>
+  1263→                  <thead>
+  1264→                    <tr>
+  1265→                      <Th>کد سفارش</Th>
+  1266→                      <Th>تامین‌کننده</Th>
+  1267→                      <Th>مبلغ کل</Th>
+  1268→                      <Th>تاریخ بستن</Th>
+  1269→                      <Th className="text-left">عملیات</Th>
+  1270→                    </tr>
+  1271→                  </thead>
+  1272→                  <tbody>
+  1273→                    {done.map((o) => (
+  1274→                      <tr key={o.id} className="transition hover:bg-[#FBF9F3]">
+  1275→                        <Td className="font-bold">{o.code}</Td>
+  1276→                        <Td>{o.supplier?.name ?? '—'}</Td>
+  1277→                        <Td><Money value={o.total} className="text-xs font-semibold" /></Td>
+  1278→                        <Td className="text-xs">{fmtJalaliTime(o.doneAt)}</Td>
+  1279→                        <Td className="text-left">
+  1280→                          <GhostButton className="min-h-[44px]" onClick={() => openOrder(o.id)}>
+  1281→                            <Eye size={15} /> مشاهده
+  1282→                          </GhostButton>
+  1283→                        </Td>
+  1284→                      </tr>
+  1285→                    ))}
+  1286→                  </tbody>
+  1287→                </TableWrap>
+  1288→              </div>
+  1289→            )
+  1290→          )}
+  1291→        </>
+  1292→      )}
+  1293→
+  1294→      {/* sheet (receive / confirm) */}
+  1295→      <DeliverySheet
+  1296→        orderId={sheet?.id ?? null}
+  1297→        mode={sheet?.mode ?? 'receive'}
+  1298→        user={user}
+  1299→        onClose={closeSheet}
+  1300→        onDone={afterSheet}
+  1301→      />
+  1302→    </div>
+  1303→  )
+  1304→}
+  1305→

@@ -1,0 +1,383 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============ USERS & ROLES ============
+
+model User {
+  id          String       @id @default(cuid())
+  name        String
+  pinHash     String
+  roles       String       @default("[]") // JSON array of role keys
+  primaryRole String
+  color       String       @default("#5a7d4f")
+  active      Boolean      @default(true)
+  points      Int          @default(0)
+  phone       String?
+  notifSeen   String       @default("{}") // JSON map {notificationId: count} — cross-device seen-state
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model Role {
+  id          String @id @default(cuid())
+  key         String @unique
+  name        String // Persian display name
+  description String?
+  color       String @default("#5a7d4f")
+  permissions String @default("[]") // JSON array of permission keys
+}
+
+// ============ PRODUCTS & SUPPLIERS ============
+
+model Product {
+  id         String   @id @default(cuid())
+  name       String
+  holooName  String? // name as registered in Holoo
+  barcode    String? // primary barcode
+  barcodes   String   @default("[]") // JSON array of all barcodes
+  price      Float    @default(0) // sell price (Toman)
+  cost       Float    @default(0) // buy price (Toman)
+  stock      Float    @default(0)
+  minStock   Float    @default(10)
+  unit       String   @default("عدد")
+  category   String?
+  companyId  String?
+  company    Company? @relation(fields: [companyId], references: [id])
+  image      String?
+  holooCode  String?
+  isWeight   Boolean  @default(false) // sold by weight
+  active     Boolean  @default(true)
+  mergedInto String? // for duplicate merging
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Company {
+  id        String     @id @default(cuid())
+  name      String
+  suppliers Supplier[] @relation("SupplierCompanies")
+  products  Product[]
+}
+
+model Supplier {
+  id          String   @id @default(cuid())
+  name        String // نام نماینده / شرکت پخش
+  phone       String?
+  contactName String?
+  type        String   @default("DISTRIBUTOR") // MANUFACTURER | DISTRIBUTOR | BOTH
+  paymentType String   @default("CHEQUE") // CASH_ON_DELIVERY | CHEQUE
+  notes       String?
+  companies   Company[] @relation("SupplierCompanies")
+  orders      Order[]
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}
+
+// ============ ORDERS & DELIVERY WORKFLOW ============
+
+model Order {
+  id             String    @id @default(cuid())
+  number         Int       @default(0)
+  supplierId     String
+  supplier       Supplier @relation(fields: [supplierId], references: [id])
+  createdById    String
+  status         String    @default("DRAFT")
+  // DRAFT → PENDING_APPROVAL → APPROVED(ORDERED) → RECEIVED → INSPECTED → TO_HOLOO → DONE
+  deliveryDate   String // Jalali date string "1404/08/15"
+  paymentType    String    @default("CHEQUE") // CASH_ON_DELIVERY | CHEQUE
+  totalAmount    Float     @default(0)
+  discount       Float     @default(0)
+  tax            Float     @default(0)
+  vat            Float     @default(0)
+  finalAmount    Float     @default(0) // after corrections at delivery
+  notes          String?
+  lockedAt       DateTime? // after which only corrections allowed
+  receivedAt     DateTime?
+  receivedById   String?
+  inspectedAt    DateTime?
+  inspectedById  String?
+  exportedAt     DateTime?
+  doneAt         DateTime?
+  doneById       String?
+  holooRef       String? // document number returned by the (simulated) Holoo bridge
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  items          OrderItem[]
+  cheques        Cheque[]
+}
+
+model OrderItem {
+  id           String  @id @default(cuid())
+  orderId      String
+  order        Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId    String
+  productName  String // snapshot
+  holooName    String?
+  barcode      String?
+  quantity     Float
+  unitPrice    Float // buy price per item
+  sellPrice    Float? // current sell price snapshot
+  printedPrice Float? // corrected printed price at delivery
+  discount     Float   @default(0)
+  lineTotal    Float   @default(0)
+  receivedQty  Float?
+  status       String  @default("OK") // OK | MISSING | REJECTED
+  note         String?
+}
+
+// ============ CHEQUES & PAYMENTS ============
+
+model Cheque {
+  id            String    @id @default(cuid())
+  number        String?
+  amount        Float
+  dueDate       String // Jalali "1404/09/20"
+  status        String    @default("PENDING_OWNER")
+  // PENDING_OWNER → WRITTEN → SIGNED → READY → COLLECTED → DONE | REJECTED | UNCOLLECTED
+  payeeName     String?
+  payeePhone    String?
+  orderId       String?
+  order         Order?    @relation(fields: [orderId], references: [id])
+  purpose       String?
+  writtenAt     DateTime?
+  collectedAt   DateTime?
+  createdById   String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model Payment {
+  id          String   @id @default(cuid())
+  amount      Float
+  method      String   @default("CASH") // CASH | CARD | CHEQUE
+  orderId     String?
+  receiptNo   String?
+  posReceipt  String?
+  note        String?
+  createdById String
+  createdAt   DateTime @default(now())
+}
+
+model Holiday {
+  id        String @id @default(cuid())
+  date      String @unique // Jalali "1404/09/12"
+  title     String
+}
+
+// ============ STAFF WORKSPACE ============
+
+model Task {
+  id          String    @id @default(cuid())
+  title       String
+  description String?
+  assignedTo  String // userId or role key
+  assigneeType String   @default("USER") // USER | ROLE
+  createdById String
+  status      String    @default("TODO") // TODO | IN_PROGRESS | FOLLOW_UP | DONE
+  priority    String    @default("MEDIUM") // LOW | MEDIUM | HIGH | URGENT
+  dueDate     String? // Jalali
+  checklist   String? // JSON [{text, done}]
+  blockedNote String? // reason when paused
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Shift {
+  id          String    @id @default(cuid())
+  userId      String
+  weekStart   String // Jalali YYYY/MM/DD of Saturday (start of week)
+  day         Int // 0=شنبه .. 6=جمعه
+  type        String    @default("MORNING") // MORNING | EVENING | NIGHT | OFF
+  note        String?
+  updatedById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([userId, weekStart, day])
+}
+
+model SOP {
+  id         String   @id @default(cuid())
+  title      String
+  content    String
+  category   String   @default("عمومی")
+  steps      String? // JSON array of steps
+  createdById String
+  views      Int      @default(0)
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model WallPost {
+  id        String   @id @default(cuid())
+  authorId  String
+  content   String
+  pinned    Boolean  @default(false)
+  likes     String   @default("[]") // JSON array of userIds
+  createdAt DateTime @default(now())
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  userId    String
+  content   String
+  color     String   @default("olive")
+  pinned    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Feedback {
+  id        String   @id @default(cuid())
+  content   String
+  category  String   @default("پلتفرم")
+  rating    Int      @default(3)
+  status    String   @default("NEW") // NEW | REVIEWED | ACTIONED
+  response  String?
+  createdAt DateTime @default(now())
+}
+
+model Idea {
+  id        String   @id @default(cuid())
+  authorId  String
+  title     String
+  content   String
+  status    String   @default("SUBMITTED") // SUBMITTED | UNDER_REVIEW | ACCEPTED | IMPLEMENTED | REJECTED
+  rewardPoints Int   @default(0)
+  reviewedBy String?
+  createdAt DateTime @default(now())
+}
+
+// ============ GAMIFICATION ============
+
+model Activity {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String // TASK_DONE | DELIVERY | CLEANING | HELP | IDEA | OTHER | MANUAL_AWARD
+  title     String
+  points    Int      @default(0)
+  note      String?
+  awardedById String?
+  createdAt DateTime @default(now())
+}
+
+// ============ SALES ============
+
+model Customer {
+  id          String   @id @default(cuid())
+  name        String
+  phone       String?
+  birthday    String? // Jalali
+  preferences String?
+  notes       String?
+  points      Int      @default(0)
+  createdById String
+  createdAt   DateTime @default(now())
+}
+
+model SaleOrder {
+  id            String    @id @default(cuid())
+  customerId    String?
+  customerName  String
+  customerPhone String?
+  salespersonId String
+  cashierId     String?
+  items         String // JSON [{productId, name, qty, price}]
+  total         Float     @default(0)
+  status        String    @default("PENDING") // PENDING | ACCEPTED | CASHED
+  note          String?
+  cashedAt      DateTime?
+  createdAt     DateTime  @default(now())
+}
+
+model CustomerRequest {
+  id          String   @id @default(cuid())
+  productName String
+  details     String?
+  count       Int      @default(1)
+  requestedById String
+  status      String   @default("OPEN") // OPEN | ORDERED | RESOLVED
+  createdAt   DateTime @default(now())
+}
+
+model ProductRequest {
+  id          String   @id @default(cuid())
+  productName String
+  details     String?
+  suggestedById String
+  status      String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  reviewedById String?
+  createdAt   DateTime @default(now())
+}
+
+model WarehouseRequest {
+  id            String    @id @default(cuid())
+  productId     String
+  productName   String
+  quantity      Float
+  requestedById String // merchandiser
+  status        String    @default("PENDING") // PENDING | PREPARED | SENT | RECEIVED
+  preparedById  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+// ============ PLANOGRAM ============
+
+model Planogram {
+  id          String   @id @default(cuid())
+  name        String
+  rows        Int      @default(4)
+  cols        Int      @default(6)
+  cells       String   @default("[]") // JSON grid of productIds
+  assignedTo  String? // merchandiser userId
+  status      String   @default("DRAFT") // DRAFT | PUBLISHED | DONE
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ============ MESSAGING ============
+
+model Conversation {
+  id             String   @id @default(cuid())
+  participantIds String // JSON array of userIds
+  title          String?
+  lastMessageAt  DateTime @default(now())
+  createdAt      DateTime @default(now())
+}
+
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String
+  senderId       String
+  content        String
+  readBy         String   @default("[]") // JSON array of userIds
+  createdAt      DateTime @default(now())
+}
+
+// ============ AUDIT & SETTINGS ============
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String
+  userName   String
+  action     String
+  entityType String
+  entityId   String?
+  details    String? // JSON
+  createdAt  DateTime @default(now())
+}
+
+model Setting {
+  key   String @id
+  value String
+}

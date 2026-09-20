@@ -1,0 +1,578 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * Hyper Zeytoon — Industry Demo Lab «آزمایشگاه دموی صنعت» (Task 12-a)
+     5→ *
+     6→ * Showcase for prospective business testers: pick a company size preset, one
+     7→ * gold button generates a fully auto-generated virtual gourmet-retail company
+     8→ * (deterministic, server-side), then renders it as a luxurious Persian demo:
+     9→ * hero with Persian-arch art, KPI cards, before/after benefit table, branches,
+    10→ * departments, suppliers (stale price-list concept), order pipeline viz,
+    11→ * cheque timeline, and a «مبانی علمی» tab rendering RESEARCH_FINDINGS.
+    12→ *
+    13→ * API: GET/POST /api/demo (manager-gated POST — OWNER|GM|OM|IT_ADMIN).
+    14→ */
+    15→import * as React from 'react'
+    16→import {
+    17→  FlaskConical, Store, Building2, Landmark, BookOpen, Users, UserRound, MapPin, Boxes, Truck,
+    18→  CreditCard, ShieldAlert, Leaf, BarChart3, RefreshCw, FileWarning, Sparkles, Percent,
+    19→  MapPinned, CalendarClock, CheckCircle2, TrendingDown, History,
+    20→} from 'lucide-react'
+    21→import { toast } from 'sonner'
+    22→import { api } from '@/lib/api'
+    23→import { fmtJalaliLong, toFaDigits } from '@/lib/jalali'
+    24→import { hasRole, type PUser } from '@/lib/types'
+    25→import {
+    26→  Card, SectionHeader, StatCard, Badge, StatusBadge, GoldButton,
+    27→  EmptyState, Spinner, Tabs, TableWrap, Th, Td, Money,
+    28→} from './kit'
+    29→import { SkeletonBlock } from './Skeletons'
+    30→import { ArchMotif, PistachioMotif } from './CultureArt'
+    31→import { RESEARCH_FINDINGS, RESEARCH_CATEGORIES } from '@/lib/research'
+    32→import { cn } from '@/lib/utils'
+    33→import type { DemoData, DemoSizeKey, DemoOrder } from '@/app/api/demo/generator'
+    34→
+    35→/* ================= local types & helpers ================= */
+    36→
+    37→interface DemoCompanyDTO {
+    38→  id: number
+    39→  name: string
+    40→  sizeKey: string
+    41→  createdAt: string
+    42→  data: DemoData | null
+    43→}
+    44→
+    45→/** Persian digits, grouped with «٬» — e.g. ۱۲٬۵۰۰٬۰۰۰ تومان */
+    46→const faMoney = (n: number) => `${toFaDigits(new Intl.NumberFormat('en-US').format(Math.round(n)).replace(/,/g, '٬'))} تومان`
+    47→/** Persian digits integer */
+    48→const faInt = (n: number) => toFaDigits(Math.round(n))
+    49→/** Persian digits with one decimal + «٫» separator — e.g. ۱۱٫۴ */
+    50→const fa1 = (n: number) => toFaDigits((Math.round(n * 10) / 10).toFixed(1).replace('.', '٫'))
+    51→
+    52→const SIZE_LABELS_FA: Record<string, string> = {
+    53→  BOUTIQUE: 'بوتیک تک‌شعبه',
+    54→  MID: 'زنجیره متوسط',
+    55→  LARGE: 'زنجیره بزرگ',
+    56→}
+    57→
+    58→const SIZE_PRESETS: { key: DemoSizeKey; title: string; en: string; desc: string; branches: number; icon: React.ReactNode }[] = [
+    59→  {
+    60→    key: 'BOUTIQUE', title: 'بوتیک تک‌شعبه', en: 'Boutique · single store', branches: 1,
+    61→    desc: 'یک فروشگاه لوکس کوچک؛ تیم ۶–۸ نفره، ۵ تأمین‌کننده و ۲۰ سفارش در ماه',
+    62→    icon: <Store size={20} />,
+    63→  },
+    64→  {
+    65→    key: 'MID', title: 'زنجیره متوسط (۴ شعبه)', en: 'Mid-size chain', branches: 4,
+    66→    desc: '۴ شعبه در مناطق برتر تهران و کرج؛ تیم ۱۲–۱۶ نفره، ۹ تأمین‌کننده و ۴۵ سفارش',
+    67→    icon: <Building2 size={20} />,
+    68→  },
+    69→  {
+    70→    key: 'LARGE', title: 'زنجیره بزرگ (۹ شعبه)', en: 'Large chain', branches: 9,
+    71→    desc: '۹ شعبه در تهران، کرج و اصفهان؛ تیم ۲۰–۲۴ نفره، ۱۴ تأمین‌کننده و ۹۰ سفارش',
+    72→    icon: <Landmark size={20} />,
+    73→  },
+    74→]
+    75→
+    76→/** olive/gold status palette for the pipeline distribution bar */
+    77→const PIPELINE_STATUS_META: { key: DemoOrder['status']; label: string; color: string }[] = [
+    78→  { key: 'DRAFT', label: 'پیش‌نویس', color: '#B8B29A' },
+    79→  { key: 'SUBMITTED', label: 'در انتظار تایید', color: '#DAA520' },
+    80→  { key: 'APPROVED', label: 'تایید شده', color: '#93C572' },
+    81→  { key: 'RECEIVED', label: 'تحویل شده', color: '#5F8F55' },
+    82→  { key: 'CONFIRMED', label: 'تایید انبار', color: '#3E6B4A' },
+    83→  { key: 'DONE', label: 'بسته شده', color: '#8A6508' },
+    84→]
+    85→
+    86→const RESEARCH_ICONS: Record<string, React.ComponentType<{ size?: number | string; className?: string }>> = {
+    87→  ShieldAlert, Leaf, BarChart3, RefreshCw, FileWarning, Sparkles, Percent, Building2, MapPinned,
+    88→}
+    89→
+    90→/* ================= loading skeleton (mirrors the real layout) ================= */
+    91→
+    92→function DemoShowcaseSkeleton() {
+    93→  return (
+    94→    <div role="status" aria-label="در حال بارگذاری شرکت نمونه…" className="space-y-4">
+    95→      <SkeletonBlock className="h-44 w-full rounded-2xl" />
+    96→      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+    97→        {Array.from({ length: 6 }).map((_, i) => (
+    98→          <SkeletonBlock key={i} className="h-24 rounded-2xl" />
+    99→        ))}
+   100→      </div>
+   101→      <SkeletonBlock className="h-72 w-full rounded-2xl" />
+   102→    </div>
+   103→  )
+   104→}
+   105→
+   106→/* ================= component ================= */
+   107→
+   108→export default function DemoSection({ user }: { user: PUser }) {
+   109→  const canDemo =
+   110→    hasRole(user, 'OWNER') || hasRole(user, 'GENERAL_MANAGER') ||
+   111→    hasRole(user, 'OPERATION_MANAGER') || hasRole(user, 'IT_ADMIN')
+   112→
+   113→  const [loading, setLoading] = React.useState(true)
+   114→  const [generating, setGenerating] = React.useState(false)
+   115→  const [company, setCompany] = React.useState<DemoCompanyDTO | null>(null)
+   116→  const [size, setSize] = React.useState<DemoSizeKey>('MID')
+   117→  const [tab, setTab] = React.useState('company')
+   118→  const [sciCat, setSciCat] = React.useState<string>('ALL')
+   119→
+   120→  /* auto-load the latest generated company */
+   121→  React.useEffect(() => {
+   122→    let alive = true
+   123→    api.get<{ company: DemoCompanyDTO | null }>('/api/demo')
+   124→      .then((r) => { if (alive) setCompany(r.company ?? null) })
+   125→      .catch(() => { if (alive) toast.error('خطا در دریافت شرکت نمونه') })
+   126→      .finally(() => { if (alive) setLoading(false) })
+   127→    return () => { alive = false }
+   128→  }, [])
+   129→
+   130→  async function generate() {
+   131→    setGenerating(true)
+   132→    try {
+   133→      const r = await api.post<{ company: DemoCompanyDTO | null }>('/api/demo', { userId: user.id, sizeKey: size })
+   134→      setCompany(r.company ?? null)
+   135→      toast.success(`شرکت نمونه «${r.company?.name ?? ''}» تولید شد ✓`)
+   136→    } catch (e) {
+   137→      toast.error(e instanceof Error ? e.message : 'خطا در تولید شرکت نمونه')
+   138→    } finally {
+   139→      setGenerating(false)
+   140→    }
+   141→  }
+   142→
+   143→  const d = company?.data ?? null
+   144→
+   145→  /* pipeline distribution (derived once per company) */
+   146→  const statusSegments = React.useMemo(() => {
+   147→    if (!d) return []
+   148→    const total = d.pipeline.length || 1
+   149→    return PIPELINE_STATUS_META.map((m) => {
+   150→      const count = d.pipeline.filter((o) => o.status === m.key).length
+   151→      return { ...m, count, pct: Math.round((count / total) * 1000) / 10 }
+   152→    })
+   153→  }, [d])
+   154→
+   155→  const lastOrders = React.useMemo(() => (d ? d.pipeline.slice(-8).slice().reverse() : []), [d])
+   156→  const nextCheques = React.useMemo(
+   157→    () => (d ? d.cheques.slice().sort((a, b) => a.dueDate.localeCompare(b.dueDate)).slice(0, 8) : []),
+   158→    [d],
+   159→  )
+   160→  const findings = React.useMemo(
+   161→    () => (sciCat === 'ALL' ? RESEARCH_FINDINGS : RESEARCH_FINDINGS.filter((f) => f.category === sciCat)),
+   162→    [sciCat],
+   163→  )
+   164→
+   165→  if (!canDemo) {
+   166→    return (
+   167→      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-8 text-center">
+   168→        <p className="text-lg font-bold text-amber-800">دسترسی به آزمایشگاه دمو برای نقش شما مجاز نیست</p>
+   169→        <p className="mt-1 text-sm text-amber-700">This lab is available to owners &amp; managers only.</p>
+   170→      </div>
+   171→    )
+   172→  }
+   173→
+   174→  return (
+   175→    <div className="space-y-5">
+   176→      <SectionHeader
+   177→        tone="gold"
+   178→        icon={<FlaskConical size={22} />}
+   179→        title="آزمایشگاه دموی صنعت"
+   180→        subtitle="Industry Demo Lab — یک شرکت واقعی‌نما بسازید و پلتفرم را روی آن ببینید"
+   181→        actions={
+   182→          company ? (
+   183→            <Badge className="border-[#EAD9A8] bg-[#FBF3DC] text-[#8A6508]">
+   184→              <History size={12} /> آخرین تولید: {SIZE_LABELS_FA[company.sizeKey] ?? company.sizeKey}
+   185→            </Badge>
+   186→          ) : undefined
+   187→        }
+   188→      />
+   189→
+   190→      {/* ---------- size presets ---------- */}
+   191→      <section aria-label="انتخاب اندازه شرکت نمونه" className="space-y-3">
+   192→        <div className="grid gap-3 sm:grid-cols-3">
+   193→          {SIZE_PRESETS.map((p) => (
+   194→            <button
+   195→              key={p.key}
+   196→              type="button"
+   197→              onClick={() => setSize(p.key)}
+   198→              aria-pressed={size === p.key}
+   199→              disabled={generating}
+   200→              className={cn(
+   201→                'flex min-h-[44px] flex-col items-start gap-2 rounded-2xl border p-4 text-right transition-all',
+   202→                'disabled:cursor-not-allowed disabled:opacity-60',
+   203→                size === p.key
+   204→                  ? 'border-[#DAA520] bg-gradient-to-br from-[#FBF3DC] to-white shadow-md ring-2 ring-[#DAA520]/40'
+   205→                  : 'border-[#E4DCC8] bg-white/80 hover:border-[#93C572] hover:shadow-sm',
+   206→              )}
+   207→            >
+   208→              <div className="flex w-full items-center justify-between gap-2">
+   209→                <span
+   210→                  className={cn(
+   211→                    'flex h-10 w-10 items-center justify-center rounded-xl shadow-sm',
+   212→                    size === p.key ? 'bg-gradient-to-br from-[#B8860B] to-[#DAA520] text-white' : 'bg-[#F3F7EF] text-[#3E6B4A]',
+   213→                  )}
+   214→                >
+   215→                  {p.icon}
+   216→                </span>
+   217→                <Badge className={size === p.key ? 'border-[#EAD9A8] bg-[#FBF3DC] text-[#8A6508]' : 'border-[#E4DCC8] bg-[#F5F2E8] text-[#6B7A66]'}>
+   218→                  {p.branches === 1 ? '۱ شعبه' : `${toFaDigits(p.branches)} شعبه`}
+   219→                </Badge>
+   220→              </div>
+   221→              <div>
+   222→                <div className="text-sm font-bold text-[#253A2A]">{p.title}</div>
+   223→                <div className="text-[11px] font-medium tracking-wide text-[#8A9884]">{p.en}</div>
+   224→              </div>
+   225→              <p className="text-xs leading-5 text-[#6B7A66]">{p.desc}</p>
+   226→            </button>
+   227→          ))}
+   228→        </div>
+   229→        <div className="flex flex-wrap items-center gap-3">
+   230→          <GoldButton onClick={generate} disabled={generating} className="min-h-[44px] px-6">
+   231→            {generating ? <Spinner className="text-[#3A2E05]" /> : <FlaskConical size={16} />}
+   232→            {generating ? 'در حال تولید شرکت نمونه…' : 'تولید شرکت نمونه'}
+   233→          </GoldButton>
+   234→          <p className="text-xs text-[#8A9884]">
+   235→            ساخت داده کاملاً خودکار است — همه‌چیز در چند ثانیه ساخته می‌شود | Fully auto-generated in seconds
+   236→          </p>
+   237→        </div>
+   238→      </section>
+   239→
+   240→      <Tabs
+   241→        tabs={[
+   242→          { key: 'company', label: 'نمای شرکت', icon: <Building2 size={15} /> },
+   243→          { key: 'science', label: 'مبانی علمی', icon: <BookOpen size={15} /> },
+   244→        ]}
+   245→        active={tab}
+   246→        onChange={setTab}
+   247→      />
+   248→
+   249→      {/* ---------- loading ---------- */}
+   250→      {loading && <DemoShowcaseSkeleton />}
+   251→
+   252→      {/* ---------- no company yet ---------- */}
+   253→      {!loading && !company && (
+   254→        <EmptyState
+   255→          icon={<FlaskConical size={40} />}
+   256→          title="هنوز شرکت نمونه‌ای تولید نشده است"
+   257→          hint="یک اندازه انتخاب کنید و روی «تولید شرکت نمونه» بزنید — یک کسب‌وکار گورمت واقعی‌نما با شعبه، پرسنل، تأمین‌کننده، سفارش و چک برای شما ساخته می‌شود."
+   258→        />
+   259→      )}
+   260→
+   261→      {/* ---------- company showcase ---------- */}
+   262→      {!loading && tab === 'company' && d && (
+   263→        <div className="space-y-4">
+   264→          {/* hero */}
+   265→          <Card className="pz-panel-in relative overflow-hidden">
+   266→            <ArchMotif className="pointer-events-none absolute -top-10 left-0 h-60 w-auto text-[#B8860B] opacity-[0.14]" />
+   267→            <PistachioMotif className="pointer-events-none absolute -bottom-2 right-1 h-28 w-auto text-[#5F8F55] opacity-[0.16]" />
+   268→            <div className="relative p-5 sm:p-6">
+   269→              <div className="flex flex-wrap items-center gap-2">
+   270→                <Badge className="border-[#EAD9A8] bg-[#FBF3DC] text-[#8A6508]">
+   271→                  {SIZE_LABELS_FA[company?.sizeKey ?? ''] ?? company?.sizeKey}
+   272→                </Badge>
+   273→                <Badge className="border-[#D8E2D0] bg-[#F3F7EF] text-[#3E6B4A]">شرکت فرضی · Virtual demo</Badge>
+   274→              </div>
+   275→              <h3 className="mt-3 text-2xl font-black tracking-tight text-[#253A2A] sm:text-3xl">{d.profile.name}</h3>
+   276→              <p className="mt-1 text-sm italic text-[#6B7A66]">«{d.profile.slogan}»</p>
+   277→              <div className="mt-4 flex flex-wrap gap-2 text-xs font-semibold text-[#4A5A44]">
+   278→                <span className="flex items-center gap-1.5 rounded-full border border-[#E4DCC8] bg-white/80 px-3 py-1.5">
+   279→                  <MapPin size={13} className="text-[#B8860B]" /> دفتر مرکزی: {d.profile.hqCity}
+   280→                </span>
+   281→                <span className="flex items-center gap-1.5 rounded-full border border-[#E4DCC8] bg-white/80 px-3 py-1.5">
+   282→                  <CalendarClock size={13} className="text-[#B8860B]" /> تأسیس {toFaDigits(d.profile.foundedYear)}
+   283→                </span>
+   284→                <span className="flex items-center gap-1.5 rounded-full border border-[#E4DCC8] bg-white/80 px-3 py-1.5">
+   285→                  <Landmark size={13} className="text-[#5F8F55]" /> {toFaDigits(d.profile.branchCount)} شعبه
+   286→                </span>
+   287→                <span className="flex items-center gap-1.5 rounded-full border border-[#E4DCC8] bg-white/80 px-3 py-1.5">
+   288→                  <Users size={13} className="text-[#5F8F55]" /> {toFaDigits(d.profile.staffCount)} نفر پرسنل
+   289→                </span>
+   290→                <span className="flex items-center gap-1.5 rounded-full border border-[#E4DCC8] bg-white/80 px-3 py-1.5">
+   291→                  <Boxes size={13} className="text-[#5F8F55]" /> {toFaDigits(d.profile.supplierCount)} تأمین‌کننده
+   292→                </span>
+   293→                <span className="flex items-center gap-1.5 rounded-full border border-[#E4DCC8] bg-white/80 px-3 py-1.5">
+   294→                  <Truck size={13} className="text-[#5F8F55]" /> {toFaDigits(d.profile.orderCount)} سفارش در ۳۰ روز
+   295→                </span>
+   296→              </div>
+   297→            </div>
+   298→          </Card>
+   299→
+   300→          {/* KPI row */}
+   301→          <section aria-label="شاخص‌های کلیدی شرکت نمونه" className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+   302→            <StatCard
+   303→              tone="olive" icon={<RefreshCw size={18} />}
+   304→              label="گردش موجودی" value={`${fa1(d.kpi.inventoryTurnover)} بار`} sub="Inventory turns / year"
+   305→            />
+   306→            <StatCard
+   307→              tone="olive" icon={<CheckCircle2 size={18} />}
+   308→              label="نرخ تکمیل سفارش" value={`${faInt(d.kpi.fillRatePct)}٪`} sub="Fill rate"
+   309→            />
+   310→            <StatCard
+   311→              tone="gold" icon={<Truck size={18} />}
+   312→              label="تحویل به‌موقع" value={`${faInt(d.kpi.onTimeDeliveryPct)}٪`} sub="On-time delivery"
+   313→            />
+   314→            <StatCard
+   315→              tone="rose" icon={<TrendingDown size={18} />}
+   316→              label="نرخ نزولات" value={`${fa1(d.kpi.shrinkagePct)}٪`} sub="Shrinkage rate"
+   317→            />
+   318→            <StatCard
+   319→              tone="gold" icon={<Sparkles size={18} />}
+   320→              label="ساعات اداری صرفه‌جویی‌شده" value={`${faInt(d.kpi.adminHoursSavedPerWeek)} ساعت`} sub="Admin hours saved / week"
+   321→            />
+   322→            <StatCard
+   323→              tone="olive" icon={<CalendarClock size={18} />}
+   324→              label="سفارش تا بسته‌شدن" value={`${faInt(d.kpi.orderToDoneHours)} ساعت`} sub="Order-to-done hours"
+   325→            />
+   326→          </section>
+   327→
+   328→          {/* benefits table */}
+   329→          <Card className="pz-panel-in p-4 sm:p-5">
+   330→            <h4 className="text-base font-bold text-[#253A2A]">چگونه پلتفرم بهره‌وری را متحول می‌کند</h4>
+   331→            <p className="mt-0.5 text-xs text-[#8A9884]">How the platform transforms productivity — minutes per task, manual vs Hyper Zeytoon</p>
+   332→            <TableWrap className="mt-3">
+   333→              <thead>
+   334→                <tr>
+   335→                  <Th>گردش کار</Th>
+   336→                  <Th>روش دستی (دقیقه)</Th>
+   337→                  <Th>با هایپر زیتون (دقیقه)</Th>
+   338→                  <Th>صرفه‌جویی</Th>
+   339→                </tr>
+   340→              </thead>
+   341→              <tbody>
+   342→                {d.benefits.map((b) => {
+   343→                  const saved = Math.max(0, Math.round((1 - b.afterMinutes / b.beforeMinutes) * 100))
+   344→                  return (
+   345→                    <tr key={b.workflow}>
+   346→                      <Td>
+   347→                        <div className="font-semibold text-[#253A2A]">{b.workflow}</div>
+   348→                        <div className="text-[11px] text-[#8A9884]">{b.workflowEn}</div>
+   349→                      </Td>
+   350→                      <Td className="tabular-nums text-[#6B7A66] line-through decoration-[#DAA520]/60">{faInt(b.beforeMinutes)}</Td>
+   351→                      <Td className="font-bold tabular-nums text-[#3E6B4A]">{faInt(b.afterMinutes)}</Td>
+   352→                      <Td>
+   353→                        <Badge className="border-[#EAD9A8] bg-[#FBF3DC] font-bold text-[#8A6508]">{toFaDigits(saved)}٪ کمتر</Badge>
+   354→                      </Td>
+   355→                    </tr>
+   356→                  )
+   357→                })}
+   358→              </tbody>
+   359→            </TableWrap>
+   360→            <p className="mt-2 text-[11px] text-[#8A9884]">پیش و پس بر پایه «مبانی علمی» — تب دوم همین بخش | Based on the Scientific Foundations tab</p>
+   361→          </Card>
+   362→
+   363→          {/* branches */}
+   364→          <section aria-label="شعبه‌ها">
+   365→            <h4 className="mb-2 flex items-center gap-2 text-sm font-bold text-[#4A5A44]">
+   366→              <Landmark size={16} className="text-[#B8860B]" /> شعبه‌ها | Branches
+   367→            </h4>
+   368→            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+   369→              {d.branches.map((br) => (
+   370→                <Card key={br.name} className="p-4">
+   371→                  <div className="flex items-center justify-between gap-2">
+   372→                    <div className="font-bold text-[#253A2A]">{br.name}</div>
+   373→                    <Badge className="border-[#EAD9A8] bg-[#FBF3DC] text-[#8A6508]">{toFaDigits(br.sqm)} متر²</Badge>
+   374→                  </div>
+   375→                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#6B7A66]">
+   376→                    <span className="flex items-center gap-1"><Users size={13} className="text-[#5F8F55]" /> {toFaDigits(br.staffCount)} نفر</span>
+   377→                    <span className="flex items-center gap-1"><UserRound size={13} className="text-[#5F8F55]" /> مدیر: {br.managerName}</span>
+   378→                  </div>
+   379→                </Card>
+   380→              ))}
+   381→            </div>
+   382→          </section>
+   383→
+   384→          {/* departments */}
+   385→          <section aria-label="دپارتمان‌های گورمت">
+   386→            <h4 className="mb-2 flex items-center gap-2 text-sm font-bold text-[#4A5A44]">
+   387→              <Boxes size={16} className="text-[#B8860B]" /> دپارتمان‌ها | Departments
+   388→            </h4>
+   389→            <div className="flex flex-wrap gap-2">
+   390→              {d.departments.map((dep) => (
+   391→                <Badge key={dep} className="border-[#EAD9A8] bg-[#FBF3DC] px-3 py-1.5 text-[#8A6508]">{dep}</Badge>
+   392→              ))}
+   393→            </div>
+   394→          </section>
+   395→
+   396→          {/* suppliers */}
+   397→          <Card className="pz-panel-in p-4 sm:p-5">
+   398→            <h4 className="text-base font-bold text-[#253A2A]">تأمین‌کنندگان</h4>
+   399→            <p className="mt-0.5 text-xs text-[#8A9884]">Suppliers — فهرست قیمت کهنه (≥ ۳۰ روز) همان‌طور که در پلتفرم هشدار داده می‌شود، کهربایی نمایش داده می‌شود</p>
+   400→            <TableWrap className="mt-3">
+   401→              <thead>
+   402→                <tr>
+   403→                  <Th>تأمین‌کننده</Th>
+   404→                  <Th>حوزه</Th>
+   405→                  <Th>شرایط پرداخت</Th>
+   406→                  <Th>عمر فهرست قیمت</Th>
+   407→                </tr>
+   408→              </thead>
+   409→              <tbody>
+   410→                {d.suppliers.map((s) => (
+   411→                  <tr key={s.name} className={s.priceListAgeDays >= 30 ? 'bg-amber-50/60' : undefined}>
+   412→                    <Td className="font-semibold">{s.name}</Td>
+   413→                    <Td className="text-xs text-[#6B7A66]">{s.domain}</Td>
+   414→                    <Td>
+   415→                      <Badge className={s.paymentTerms === 'CHEQUE' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}>
+   416→                        {s.paymentTerms === 'CHEQUE' ? 'چک' : 'نقدی'}
+   417→                      </Badge>
+   418→                    </Td>
+   419→                    <Td>
+   420→                      {s.priceListAgeDays >= 30 ? (
+   421→                        <Badge className="border-amber-300 bg-amber-100 font-bold text-amber-800">{toFaDigits(s.priceListAgeDays)} روز — کهنه</Badge>
+   422→                      ) : (
+   423→                        <span className="text-xs font-semibold text-emerald-700">{toFaDigits(s.priceListAgeDays)} روز</span>
+   424→                      )}
+   425→                    </Td>
+   426→                  </tr>
+   427→                ))}
+   428→              </tbody>
+   429→            </TableWrap>
+   430→          </Card>
+   431→
+   432→          {/* order pipeline */}
+   433→          <Card className="pz-panel-in p-4 sm:p-5">
+   434→            <div className="flex flex-wrap items-center justify-between gap-2">
+   435→              <div>
+   436→                <h4 className="text-base font-bold text-[#253A2A]">خط لوله سفارش — ۳۰ روز گذشته</h4>
+   437→                <p className="mt-0.5 text-xs text-[#8A9884]">Order pipeline — status distribution & latest orders</p>
+   438→              </div>
+   439→              <Badge className="border-[#D8E2D0] bg-[#F3F7EF] text-[#3E6B4A]">{toFaDigits(d.pipeline.length)} سفارش</Badge>
+   440→            </div>
+   441→            {/* distribution bar */}
+   442→            <div
+   443→              className="mt-4 flex h-4 w-full overflow-hidden rounded-full bg-[#F5F2E8]"
+   444→              role="img"
+   445→              aria-label={statusSegments.map((s) => `${s.label}: ${faInt(s.count)}`).join('، ')}
+   446→            >
+   447→              {statusSegments.map((s) =>
+   448→                s.count > 0 ? <div key={s.key} style={{ width: `${s.pct}%`, backgroundColor: s.color }} title={`${s.label}: ${faInt(s.count)}`} /> : null,
+   449→              )}
+   450→            </div>
+   451→            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
+   452→              {statusSegments.map((s) => (
+   453→                <span key={s.key} className="flex items-center gap-1.5 text-xs text-[#4A5A44]">
+   454→                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: s.color }} aria-hidden />
+   455→                  {s.label} <span className="font-bold tabular-nums text-[#253A2A]">{faInt(s.count)}</span>
+   456→                </span>
+   457→              ))}
+   458→            </div>
+   459→            {/* last 8 orders */}
+   460→            <div className="mt-4 rounded-xl border border-[#EFEAD8]">
+   461→              <div className="border-b border-[#EFEAD8] bg-[#FBF9F3] px-3 py-2 text-xs font-bold text-[#6B7A66]">۸ سفارش اخیر | Latest orders</div>
+   462→              <ul className="divide-y divide-[#EFEAD8]">
+   463→                {lastOrders.map((o) => (
+   464→                  <li key={o.code} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2.5 text-sm">
+   465→                    <span className="font-bold tabular-nums text-[#253A2A]">{o.code}</span>
+   466→                    <span className="min-w-0 flex-1 truncate text-xs text-[#6B7A66]">{o.supplier} · {o.branch}</span>
+   467→                    <StatusBadge status={o.status} kind="order" />
+   468→                    <Money value={o.total} className="text-xs font-bold text-[#8A6508]" />
+   469→                  </li>
+   470→                ))}
+   471→              </ul>
+   472→            </div>
+   473→          </Card>
+   474→
+   475→          {/* cheque timeline */}
+   476→          <Card className="pz-panel-in p-4 sm:p-5">
+   477→            <div className="flex flex-wrap items-center justify-between gap-2">
+   478→              <div>
+   479→                <h4 className="text-base font-bold text-[#253A2A]">چک‌های پیش‌رو — ۶۰ روز آینده</h4>
+   480→                <p className="mt-0.5 text-xs text-[#8A9884]">Upcoming cheques — Jalali due dates & statuses</p>
+   481→              </div>
+   482→              <Badge className="border-[#EAD9A8] bg-[#FBF3DC] text-[#8A6508]"><CreditCard size={12} /> {toFaDigits(nextCheques.length)} چک</Badge>
+   483→            </div>
+   484→            <ol className="mt-3 space-y-2.5">
+   485→              {nextCheques.map((c) => (
+   486→                <li key={c.code} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border border-[#EFEAD8] bg-white/70 px-3 py-2.5">
+   487→                  <span className="flex h-11 min-w-[92px] items-center justify-center rounded-lg border border-[#EAD9A8] bg-[#FBF3DC] px-2 text-center text-xs font-bold text-[#8A6508]">
+   488→                    {fmtJalaliLong(c.dueDate)}
+   489→                  </span>
+   490→                  <span className="min-w-0 flex-1">
+   491→                    <span className="block truncate text-sm font-bold text-[#253A2A]">{c.payee}</span>
+   492→                    <span className="block truncate text-[11px] text-[#8A9884]">{c.purpose}</span>
+   493→                  </span>
+   494→                  <StatusBadge status={c.status} kind="cheque" />
+   495→                  <Money value={c.amount} className="text-xs font-bold text-[#8A6508]" />
+   496→                </li>
+   497→              ))}
+   498→            </ol>
+   499→          </Card>
+   500→        </div>
+   501→      )}
+   502→
+   503→      {/* ---------- scientific foundations tab ---------- */}
+   504→      {!loading && tab === 'science' && (
+   505→        <div className="space-y-4">
+   506→          <div className="flex flex-wrap gap-2" role="group" aria-label="فیلتر دسته‌بندی یافته‌ها">
+   507→            <button
+   508→              type="button"
+   509→              onClick={() => setSciCat('ALL')}
+   510→              aria-pressed={sciCat === 'ALL'}
+   511→              className={cn(
+   512→                'min-h-[44px] rounded-full border px-4 text-xs font-bold transition-all',
+   513→                sciCat === 'ALL' ? 'border-[#B8860B] bg-gradient-to-b from-[#DAA520] to-[#B8860B] text-[#3A2E05] shadow-md' : 'border-[#E4DCC8] bg-white text-[#6B7A66] hover:border-[#93C572]',
+   514→              )}
+   515→            >
+   516→              همه | All
+   517→            </button>
+   518→            {(Object.keys(RESEARCH_CATEGORIES) as (keyof typeof RESEARCH_CATEGORIES)[]).map((cat) => (
+   519→              <button
+   520→                key={cat}
+   521→                type="button"
+   522→                onClick={() => setSciCat(cat)}
+   523→                aria-pressed={sciCat === cat}
+   524→                className={cn(
+   525→                  'min-h-[44px] rounded-full border px-4 text-xs font-bold transition-all',
+   526→                  sciCat === cat ? 'border-[#B8860B] bg-gradient-to-b from-[#DAA520] to-[#B8860B] text-[#3A2E05] shadow-md' : 'border-[#E4DCC8] bg-white text-[#6B7A66] hover:border-[#93C572]',
+   527→                )}
+   528→              >
+   529→                {RESEARCH_CATEGORIES[cat].fa} <span className="font-medium opacity-70">{RESEARCH_CATEGORIES[cat].en}</span>
+   530→              </button>
+   531→            ))}
+   532→          </div>
+   533→
+   534→          <div className="grid gap-3 md:grid-cols-2">
+   535→            {findings.map((f) => {
+   536→              const Icon = RESEARCH_ICONS[f.icon] ?? Sparkles
+   537→              return (
+   538→                <Card key={f.id} className="pz-panel-in flex flex-col p-4 sm:p-5">
+   539→                  <div className="flex items-start gap-3">
+   540→                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#B8860B] to-[#DAA520] text-white shadow-md">
+   541→                      <Icon size={18} />
+   542→                    </span>
+   543→                    <div className="min-w-0 flex-1">
+   544→                      <div className="font-bold leading-6 text-[#253A2A]">{f.title}</div>
+   545→                      <div className="text-[11px] font-medium text-[#8A9884]">{f.titleEn}</div>
+   546→                    </div>
+   547→                    <Badge className="shrink-0 border-[#D8E2D0] bg-[#F3F7EF] text-[#3E6B4A]">{RESEARCH_CATEGORIES[f.category].fa}</Badge>
+   548→                  </div>
+   549→                  <ul className="mt-3 space-y-1.5">
+   550→                    {f.bullets.map((b, i) => (
+   551→                      <li key={i} className="flex gap-2 text-xs leading-6 text-[#4A5A44]">
+   552→                        <span className="mt-[9px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#DAA520]" aria-hidden />
+   553→                        <span>{b}</span>
+   554→                      </li>
+   555→                    ))}
+   556→                  </ul>
+   557→                  <div className="mt-3 rounded-xl border border-[#EAD9A8] bg-[#FBF3DC] p-3">
+   558→                    <div className="text-[11px] font-black tracking-wide text-[#8A6508]">پاسخ پلتفرم | Platform answer</div>
+   559→                    <p className="mt-1 text-xs leading-6 text-[#6B5B2A]">{f.platformAnswer}</p>
+   560→                  </div>
+   561→                  <div className="mt-3 text-[11px] italic leading-5 text-[#8A9884]">
+   562→                    منبع: {f.citation} · {f.citationEn}
+   563→                  </div>
+   564→                  <div className="mt-2 flex flex-wrap gap-1.5">
+   565→                    {f.featureRefs.map((r) => (
+   566→                      <Badge key={r} className="border-[#E4DCC8] bg-white text-[#6B7A66]">{r}</Badge>
+   567→                    ))}
+   568→                  </div>
+   569→                </Card>
+   570→              )
+   571→            })}
+   572→          </div>
+   573→        </div>
+   574→      )}
+   575→    </div>
+   576→  )
+   577→}
+   578→

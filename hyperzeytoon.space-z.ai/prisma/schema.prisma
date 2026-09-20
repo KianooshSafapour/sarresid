@@ -1,0 +1,652 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============ ORG / PEOPLE ============
+
+model Role {
+  id          String     @id @default(cuid())
+  key         String     @unique // owner, gm, om, pm, accountant, inventory, delivery, cashier, sales, merchandiser, it_admin
+  name        String // Persian display name
+  description String?
+  color       String     @default("#3E7C59")
+  isManager   Boolean    @default(false)
+  users       UserRole[]
+  createdAt   DateTime   @default(now())
+}
+
+model User {
+  id                       String                    @id @default(cuid())
+  username                 String                    @unique
+  pin                      String // hashed pin
+  name                     String
+  title                    String // job title in Persian
+  gender                   String @default("MALE") // MALE | FEMALE — used for formal Persian honorifics (جناب آقای / سرکار خانم)
+  color                    String                    @default("#3E7C59")
+  phone                    String?
+  active                   Boolean                   @default(true)
+  points                   Int                       @default(0)
+  isRoot                   Boolean                   @default(false) // root administrator — ultimate authority (backup IM account)
+  prefs                    String? // JSON — UI personalization (theme, accent, density, sidebar order, locale)
+  locale                   String                    @default("fa") // fa | en | ar | tr
+  lastSeenAt               DateTime?
+  roles                    UserRole[]
+  wallPosts                WallPost[]
+  ideas                    IdeaPost[]
+  awards                   Award[]
+  assignedTasks            Task[]                    @relation("AssignedTasks")
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
+  conversationParticipants ConversationParticipant[]
+  messages                 Message[]
+}
+
+model UserRole {
+  userId String
+  roleId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+}
+
+// ============ PRODUCTS / SUPPLY NETWORK ============
+
+model Product {
+  id         String   @id @default(cuid())
+  name       String
+  altName    String? // secondary name / Persian synonym
+  holooCode  String?
+  category   String   @default("عمومی")
+  brand      String?
+  unit       String   @default("عدد")
+  sellPrice  Float    @default(0)
+  sellPrice2 Float? // discounted sell price ( Holoo price 2 )
+  buyPrice   Float    @default(0)
+  taxRate    Float    @default(9) // VAT percent default Iran 9%
+  stock      Int      @default(0)
+  minStock   Int      @default(6)
+  capacity   Int      @default(0) // planogram/shelf capacity
+  image      String? // url or dataURL
+  status     String   @default("ACTIVE") // ACTIVE | ARCHIVED | DUPLICATE_REVIEW
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  barcodes           Barcode[]
+  orderItems         OrderItem[]
+  sales              ProductSale[]
+  stockRequests      StockRequestOut[]
+  warehouseReqs      WarehouseRequest[]
+  shelves            Shelf[]
+  importedDuplicates String? // json list of merged duplicate names
+  stockCountItems    StockCountItem[]
+}
+
+model Barcode {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model Company {
+  id        String            @id @default(cuid())
+  name      String            @unique
+  kind      String            @default("MANUFACTURER") // MANUFACTURER | DISTRIBUTION_CENTER | BOTH
+  notes     String?
+  providers ProviderCompany[]
+  orders    Order[]
+  createdAt DateTime          @default(now())
+}
+
+model Provider {
+  id                String            @id @default(cuid())
+  name              String
+  phone             String?
+  kind              String            @default("DISTRIBUTOR") // DIRECT | DISTRIBUTOR
+  color             String            @default("#8A6F3C")
+  paymentTermsDays  Int? // agreed cheque/payment window in days (shown in order wizard)
+  city              String?
+  province          String? // Iran province — supply-chain map
+  notes             String?
+  orders            Order[]
+  companies         ProviderCompany[]
+  archiveDocs       ArchiveDocument[]
+  createdAt         DateTime          @default(now())
+}
+
+model ProviderCompany {
+  providerId String
+  companyId  String
+  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  isDirect   Boolean  @default(false) // direct from manufacturer?
+  note       String?
+
+  @@id([providerId, companyId])
+}
+
+// ============ ORDERS / DELIVERY PIPELINE ============
+
+model Order {
+  id               String    @id @default(cuid())
+  code             String    @unique // ORD-14040712-001
+  providerId       String?
+  companyId        String?
+  providerName     String // snapshot
+  companyName      String?
+  createdById      String
+  approvedById     String?
+  status           String    @default("PENDING_APPROVAL")
+  // DRAFT | PENDING_APPROVAL | APPROVED | SENT | RECEIVING | RECEIVED_BY_DELIVERY | CONFIRMED_BY_INVENTORY | ACCOUNTING_DONE | DONE | CANCELLED
+  paymentType      String    @default("CHEQUE") // CASH | CHEQUE
+  receivingDate    DateTime // expected receiving date
+  deliveredAt      DateTime?
+  confirmedAt      DateTime?
+  accountingDoneAt DateTime?
+  totalAmount      Float     @default(0)
+  discount         Float     @default(0)
+  tax              Float     @default(0)
+  vat              Float     @default(0)
+  finalAmount      Float     @default(0) // recalculated after discrepancies
+  holooTotal       Float? // number Holoo shows
+  note             String?
+  correctionNote   String?
+  lockedAt         DateTime? // edit lock -> corrections afterwards
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  items    OrderItem[]
+  history  OrderHistory[]
+  cheques  Cheque[]
+  payments Payment[]
+  company  Company?       @relation(fields: [companyId], references: [id])
+  provider Provider?      @relation(fields: [providerId], references: [id])
+}
+
+model OrderItem {
+  id             String    @id @default(cuid())
+  orderId        String
+  productId      String?
+  name           String
+  barcode        String?
+  unit           String    @default("عدد")
+  qty            Float
+  unitPrice      Float
+  discount       Float     @default(0)
+  tax            Float     @default(0)
+  vat            Float     @default(0)
+  total          Float
+  deliveredQty   Float?
+  correctedPrice Float?
+  itemStatus     String    @default("PENDING") // PENDING | OK | MISSING | REJECTED | CORRECTED
+  issue          String?
+  checkedAt      DateTime?
+  order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product        Product?  @relation(fields: [productId], references: [id])
+}
+
+model OrderHistory {
+  id        String   @id @default(cuid())
+  orderId   String
+  userId    String?
+  userName  String
+  action    String
+  detail    String?
+  createdAt DateTime @default(now())
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+// ============ PAYMENTS / CHEQUES ============
+
+model Cheque {
+  id          String    @id @default(cuid())
+  number      String
+  amount      Float
+  dueDate     DateTime
+  issueDate   DateTime  @default(now())
+  payeeName   String
+  payeePhone  String?
+  orderId     String?
+  isForOrder  Boolean   @default(true)
+  status      String    @default("PENDING_OWNER")
+  // PENDING_OWNER | SIGNED | DELIVERED | COLLECTED | CLEARED | REJECTED | UNCOLLECTED_REPORTED
+  note        String?
+  createdById String
+  signedById  String?
+  writtenAt   DateTime?
+  collectedAt DateTime?
+  givenTo     String? // courier/representative name
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  order       Order?    @relation(fields: [orderId], references: [id])
+}
+
+model Payment {
+  id           String   @id @default(cuid())
+  orderId      String?
+  amount       Float
+  type         String   @default("CASH_ON_DELIVERY") // CASH_ON_DELIVERY | CHEQUE | TRANSFER | OTHER
+  receiptNo    String?
+  posReceiptNo String?
+  note         String?
+  userId       String?
+  createdAt    DateTime @default(now())
+  order        Order?   @relation(fields: [orderId], references: [id])
+}
+
+model Holiday {
+  id     String @id @default(cuid())
+  date   String @unique // ISO yyyy-mm-dd
+  name   String
+  source String @default("MANUAL") // TIME_IR | MANUAL | SEED
+}
+
+// ============ HR / LEAVE ============
+
+model LeaveRequest {
+  id           String    @id @default(cuid())
+  userId       String
+  kind         String    @default("DAILY") // DAILY | HOURLY
+  fromDate     DateTime // inclusive (Jalali business day)
+  toDate       DateTime // inclusive
+  hours        Float? // for HOURLY kind
+  reason       String?
+  status       String    @default("PENDING") // PENDING | APPROVED | REJECTED | CANCELLED
+  approverId   String?
+  decidedAt    DateTime?
+  decisionNote String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([fromDate])
+  @@index([userId])
+}
+
+// ============ HYBRID ARCHIVE (digital + physical binder locator) ============
+
+model ArchiveBinder {
+  id        String            @id @default(cuid())
+  code      String            @unique // AB-01
+  title     String
+  category  String // گروه‌بندی موضوعی (لبنیات، شیرینی و شکلات، وارداتی، لوازم‌تحریر و اسباب‌بازی، ...)
+  color     String            @default("#8A6F3C")
+  location  String? // محل فیزیکی: کابینت / طبقه / قفسه
+  capacity  Int               @default(200) // ظرفیت جیب‌ها
+  active    Boolean           @default(true)
+  note      String?
+  createdAt DateTime          @default(now())
+  documents ArchiveDocument[]
+}
+
+model ArchiveDocument {
+  id          String         @id @default(cuid())
+  binderId    String
+  binder      ArchiveBinder  @relation(fields: [binderId], references: [id], onDelete: Cascade)
+  pocket      Int // شماره جیب/صفحه درون بایندر
+  docType     String         @default("INVOICE") // INVOICE | RECEIPT | CHEQUE | STATEMENT | CONTRACT | OTHER
+  title       String
+  docDate     DateTime?
+  amount      Float?
+  providerId  String?
+  provider    Provider?      @relation(fields: [providerId], references: [id])
+  orderId     String?
+  chequeId    String?
+  note        String?
+  createdById String?
+  createdAt   DateTime       @default(now())
+
+  @@index([binderId])
+}
+
+// ============ PERSONAL SECURE VAULT ============
+
+model VaultFile {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  mime      String?
+  size      Int      @default(0)
+  dataUrl   String? // compressed inline content (image/jpeg dataURL etc.)
+  folder    String   @default("عمومی")
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ============ PLATFORM ANALYTICS (root-admin only) ============
+
+model PlatformEvent {
+  id        String   @id @default(cuid())
+  userId    String?
+  userName  String?
+  section   String
+  action    String
+  detail    String?
+  meta      String? // JSON extras
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([section])
+}
+
+// ============ TASKS / SOP ============
+
+model Task {
+  id           String       @id @default(cuid())
+  title        String
+  description  String?
+  category     String       @default("عمومی")
+  priority     String       @default("MEDIUM") // LOW | MEDIUM | HIGH | URGENT
+  status       String       @default("TODO") // TODO | IN_PROGRESS | FOLLOW_UP | PAUSED | DONE
+  fromOwner    Boolean      @default(false)
+  createdById  String
+  assignedToId String?
+  dueDate      DateTime?
+  pauseReason  String?
+  sopId        String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  updates      TaskUpdate[]
+  assignee     User?        @relation("AssignedTasks", fields: [assignedToId], references: [id])
+}
+
+model TaskUpdate {
+  id        String   @id @default(cuid())
+  taskId    String
+  userId    String?
+  userName  String
+  content   String
+  createdAt DateTime @default(now())
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+model SOP {
+  id        String   @id @default(cuid())
+  title     String
+  category  String   @default("عمومی")
+  summary   String?
+  steps     String   @default("[]") // JSON [{title, detail, warning?}]
+  version   Int      @default(1)
+  createdBy String?
+  roleKeys  String   @default("") // comma separated target role keys
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Checklist {
+  id        String   @id @default(cuid())
+  sopId     String?
+  title     String
+  roleKey   String?
+  items     String   @default("[]") // JSON [{text}]
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model ChecklistRun {
+  id          String    @id @default(cuid())
+  checklistId String
+  userId      String
+  day         String // jalali yyyy-mm-dd
+  state       String    @default("[]") // JSON [{text, done}]
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+// ============ ENGAGEMENT ============
+
+model WallPost {
+  id        String   @id @default(cuid())
+  userId    String
+  content   String
+  category  String   @default("INFO") // INFO | WARNING | EVENT | TIP
+  pinned    Boolean  @default(false)
+  likes     Int      @default(0)
+  createdAt DateTime @default(now())
+  author    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PersonalNote {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  content   String?
+  color     String   @default("#C9A227")
+  pinned    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model FeedbackPost {
+  id         String   @id @default(cuid())
+  content    String
+  rating     Int? // 1..5 platform rating
+  anonymous  Boolean  @default(true)
+  userId     String?
+  status     String   @default("NEW") // NEW | REVIEWED | ACTIONED
+  adminReply String?
+  createdAt  DateTime @default(now())
+}
+
+model IdeaPost {
+  id           String   @id @default(cuid())
+  userId       String
+  title        String
+  content      String
+  status       String   @default("SUBMITTED") // SUBMITTED | UNDER_REVIEW | ACCEPTED | IMPLEMENTED | REJECTED
+  rewardPoints Int      @default(0)
+  adminNote    String?
+  createdAt    DateTime @default(now())
+  author       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Award {
+  id          String   @id @default(cuid())
+  userId      String
+  points      Int
+  reason      String
+  grantedById String?
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ============ CHAT ============
+
+model Conversation {
+  id           String                    @id @default(cuid())
+  isGroup      Boolean                   @default(false)
+  title        String?
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  participants ConversationParticipant[]
+  messages     Message[]
+}
+
+model ConversationParticipant {
+  id             String       @id @default(cuid())
+  conversationId String
+  userId         String
+  lastReadAt     DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  userId         String
+  content        String
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ============ SALES / CUSTOMERS ============
+
+model Customer {
+  id               String   @id @default(cuid())
+  name             String
+  phone            String?
+  favoriteProducts String? // text
+  tasteNotes       String?
+  salespersonId    String?
+  visits           Int      @default(0)
+  points           Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model CustomerOrder {
+  id            String    @id @default(cuid())
+  customerId    String?
+  customerName  String?
+  salespersonId String
+  status        String    @default("PREPARING") // PREPARING | SENT_TO_CASHIER | COMPLETED | CANCELLED
+  items         String    @default("[]") // JSON [{productId,name,qty,price}]
+  total         Float     @default(0)
+  note          String?
+  cashierId     String?
+  sentAt        DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model ProductSale {
+  id        String   @id @default(cuid())
+  productId String
+  qty       Float
+  amount    Float
+  date      DateTime
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+// ============ FLOOR OPS ============
+
+model Shelf {
+  id        String   @id @default(cuid())
+  name      String
+  section   String   @default("عمومی")
+  row       Int      @default(1)
+  col       Int      @default(1)
+  productId String?
+  capacity  Int      @default(30)
+  note      String?
+  product   Product? @relation(fields: [productId], references: [id])
+}
+
+model WarehouseRequest {
+  id            String   @id @default(cuid())
+  productId     String
+  qty           Float
+  requestedById String
+  status        String   @default("PENDING") // PENDING | PREPARING | SENT | DELIVERED
+  handledById   String?
+  note          String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  product       Product  @relation(fields: [productId], references: [id])
+}
+
+model StockRequestOut {
+  id          String   @id @default(cuid())
+  productName String
+  productId   String?
+  count       Int      @default(1) // how many times customers asked
+  lastById    String?
+  note        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  product     Product? @relation(fields: [productId], references: [id])
+}
+
+model ProductSuggestion {
+  id             String   @id @default(cuid())
+  name           String
+  barcode        String?
+  note           String?
+  submittedById  String
+  status         String   @default("NEW") // NEW | REVIEWING | APPROVED | REJECTED
+  managementNote String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// ============ SYSTEM ============
+
+// ============ STOCK COUNT (جرد انبار) ============
+
+model StockCount {
+  id              String    @id @default(cuid())
+  code            String    @unique // JC-14050619-001
+  status          String    @default("IN_PROGRESS") // IN_PROGRESS | COMMITTED | CANCELLED
+  scope           String    @default("ALL") // ALL | CATEGORY | SECTION
+  category        String? // when scope=CATEGORY
+  note            String?
+  createdById     String
+  createdByName   String
+  committedAt     DateTime?
+  committedByName String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  items StockCountItem[]
+}
+
+model StockCountItem {
+  id            String     @id @default(cuid())
+  countId       String
+  count         StockCount @relation(fields: [countId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product    @relation(fields: [productId], references: [id])
+  systemStock   Int // snapshot at session start
+  countedQty    Int?
+  countedAt     DateTime?
+  countedByName String?
+  note          String?
+  createdAt     DateTime   @default(now())
+
+  @@unique([countId, productId])
+  @@index([countId])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  body      String?
+  type      String   @default("INFO") // INFO | SUCCESS | WARNING | ERROR
+  link      String? // section key to open
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  userName  String   @default("سیستم")
+  action    String
+  entity    String?
+  entityId  String?
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model Settings {
+  key   String @id
+  value String
+}

@@ -1,0 +1,608 @@
+     1→'use client'
+     2→import * as React from 'react'
+     3→import { api } from '@/lib/api'
+     4→import { hasRole } from '@/lib/types'
+     5→import type { PUser } from '@/lib/types'
+     6→import { toFaDigits } from '@/lib/jalali'
+     7→import {
+     8→  Avatar, Badge, Card, EmptyState, Field, GhostButton, GoldButton, Loading, Modal,
+     9→  Money, PrimaryButton, SectionHeader, Tabs, TimeAgo, inputCls,
+    10→} from './kit'
+    11→import { cn } from '@/lib/utils'
+    12→import { toast } from 'sonner'
+    13→import {
+    14→  ClipboardList, Users, Plus, Search, ChevronDown, ChevronUp, Minus, HeartHandshake,
+    15→  UserRound, Phone, Pencil, Info, Sparkles, PackageSearch,
+    16→} from 'lucide-react'
+    17→
+    18→type PreOrderItem = { productId?: number | null; name: string; qty: number; sellPrice: number }
+    19→type PreOrder = {
+    20→  id: number
+    21→  customerId: number | null
+    22→  customerName: string | null
+    23→  salespersonId: number
+    24→  cashierId: number | null
+    25→  items: PreOrderItem[]
+    26→  status: string
+    27→  total: number
+    28→  note: string | null
+    29→  createdAt: string
+    30→  salesperson?: { id: number; name: string; color: string } | null
+    31→  cashier?: { id: number; name: string; color: string } | null
+    32→}
+    33→type Customer = {
+    34→  id: number
+    35→  name: string
+    36→  phone: string | null
+    37→  preference: string | null
+    38→  createdById: number
+    39→  createdAt: string
+    40→}
+    41→type ProductLite = {
+    42→  id: number
+    43→  name: string
+    44→  nameFa: string | null
+    45→  barcode: string | null
+    46→  sellPrice: number
+    47→  stock: number
+    48→  unit: string
+    49→}
+    50→
+    51→const PO_STATUS: Record<string, { label: string; cls: string }> = {
+    52→  PENDING: { label: 'در انتظار آماده‌سازی', cls: 'bg-amber-50 text-amber-800 border-amber-200' },
+    53→  PREPARED: { label: 'آماده تحویل', cls: 'bg-violet-50 text-violet-800 border-violet-200' },
+    54→  DONE: { label: 'تسویه شد', cls: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
+    55→  CANCELLED: { label: 'لغو شده', cls: 'bg-stone-100 text-stone-600 border-stone-200' },
+    56→}
+    57→
+    58→export default function CrmSection({ user }: { user: PUser }) {
+    59→  const [tab, setTab] = React.useState('preorders')
+    60→
+    61→  const isSalesperson = hasRole(user, 'SALESPERSON')
+    62→  const isCashier = hasRole(user, 'CASHIER')
+    63→  const canManage = isSalesperson || hasRole(user, 'GENERAL_MANAGER') || hasRole(user, 'OPERATION_MANAGER')
+    64→
+    65→  return (
+    66→    <div>
+    67→      <SectionHeader
+    68→        title="CRM و مشتریان"
+    69→        subtitle="پیش‌صورتحساب‌ها و مشتریان وفادار"
+    70→        icon={<HeartHandshake size={20} />}
+    71→      />
+    72→      <Tabs
+    73→        tabs={[
+    74→          { key: 'preorders', label: 'پیش‌صورتحساب', icon: <ClipboardList size={15} /> },
+    75→          { key: 'customers', label: 'مشتریان وفادار', icon: <Users size={15} /> },
+    76→        ]}
+    77→        active={tab}
+    78→        onChange={setTab}
+    79→      />
+    80→      {tab === 'preorders' ? <PreOrdersTab user={user} isSalesperson={isSalesperson} isCashier={isCashier} /> : <CustomersTab canManage={canManage} />}
+    81→    </div>
+    82→  )
+    83→}
+    84→
+    85→/* ==================== PREORDERS ==================== */
+    86→
+    87→function PreOrdersTab({ user, isSalesperson, isCashier }: { user: PUser; isSalesperson: boolean; isCashier: boolean }) {
+    88→  const [preorders, setPreorders] = React.useState<PreOrder[]>([])
+    89→  const [loading, setLoading] = React.useState(true)
+    90→  const [expanded, setExpanded] = React.useState<Set<number>>(new Set())
+    91→  const [newOpen, setNewOpen] = React.useState(false)
+    92→
+    93→  const prevStatuses = React.useRef<Map<number, string> | null>(null)
+    94→
+    95→  const load = React.useCallback(async () => {
+    96→    try {
+    97→      const r = await api.get<{ preorders: PreOrder[] }>('/api/preorders')
+    98→      // notify salesperson when their own preorder changes status
+    99→      if (prevStatuses.current) {
+   100→        for (const p of r.preorders) {
+   101→          const prev = prevStatuses.current.get(p.id)
+   102→          if (prev && prev !== p.status && p.salespersonId === user.id) {
+   103→            const who = p.customerName ?? 'مشتری'
+   104→            if (p.status === 'PREPARED') toast.success(`✅ سفارش ${who} آماده شد — کنار صندوق منتظر است`)
+   105→            else if (p.status === 'DONE') toast.success(`🎉 پیش‌صورتحساب ${who} تسویه شد (+۲ امتیاز)`)
+   106→            else if (p.status === 'CANCELLED') toast.info(`پیش‌صورتحساب ${who} لغو شد`)
+   107→          }
+   108→        }
+   109→      }
+   110→      prevStatuses.current = new Map(r.preorders.map((p) => [p.id, p.status]))
+   111→      setPreorders(r.preorders)
+   112→    } catch (e) {
+   113→      if (prevStatuses.current === null) toast.error(e instanceof Error ? e.message : 'خطا در دریافت پیش‌صورتحساب‌ها')
+   114→    } finally {
+   115→      setLoading(false)
+   116→    }
+   117→  }, [user.id])
+   118→
+   119→  React.useEffect(() => {
+   120→    load()
+   121→    const t = setInterval(load, 10000)
+   122→    return () => clearInterval(t)
+   123→  }, [load])
+   124→
+   125→  const act = async (p: PreOrder, action: 'prepare' | 'done') => {
+   126→    try {
+   127→      await api.patch('/api/preorders', { id: p.id, action, cashierId: user.id, userId: user.id })
+   128→      toast.success(action === 'prepare' ? 'ثبت شد — محصولات کنار صندوق آماده است' : 'تسویه و چاپ رسید ثبت شد ✓')
+   129→      await load()
+   130→    } catch (e) {
+   131→      toast.error(e instanceof Error ? e.message : 'عملیات ناموفق بود')
+   132→    }
+   133→  }
+   134→
+   135→  const toggleExpand = (id: number) => {
+   136→    setExpanded((s) => {
+   137→      const n = new Set(s)
+   138→      if (n.has(id)) n.delete(id)
+   139→      else n.add(id)
+   140→      return n
+   141→    })
+   142→  }
+   143→
+   144→  return (
+   145→    <div>
+   146→      {/* friendly explainer */}
+   147→      <div className="mb-4 flex items-start gap-3 rounded-2xl border border-[#EAD9A8] bg-gradient-to-l from-[#FBF4DE] to-[#FBF9F3] px-4 py-3">
+   148→        <Info size={18} className="mt-0.5 shrink-0 text-[#8A6508]" />
+   149→        <p className="text-xs leading-relaxed text-[#6B5A20] sm:text-sm">
+   150→          فروشنده محصولاتی که مشتری می‌خواهد را از قبل ثبت می‌کند؛ صندوق‌دار فقط اسکن می‌کند و با مشتری گفتگو می‌کند 💬
+   151→        </p>
+   152→      </div>
+   153→
+   154→      <div className="mb-4 flex items-center justify-between gap-3">
+   155→        <div className="text-sm font-bold text-[#4A5A44]">
+   156→          {preorders.length > 0 && <span>{toFaDigits(preorders.length)} پیش‌صورتحساب</span>}
+   157→        </div>
+   158→        {isSalesperson && (
+   159→          <PrimaryButton onClick={() => setNewOpen(true)} className="min-h-[44px]">
+   160→            <Plus size={16} /> پیش‌صورتحساب جدید
+   161→          </PrimaryButton>
+   162→        )}
+   163→      </div>
+   164→
+   165→      {loading ? <Loading /> : preorders.length === 0 ? (
+   166→        <EmptyState
+   167→          icon={<ClipboardList size={38} />}
+   168→          title="هنوز پیش‌صورتحسابی ثبت نشده"
+   169→          hint={isSalesperson ? 'با دکمه «پیش‌صورتحساب جدید» اولین سفارش مشتری را ثبت کنید' : 'به‌محض ثبت توسط فروشندگان، اینجا نمایش داده می‌شود'}
+   170→        />
+   171→      ) : (
+   172→        <div className="grid gap-4 md:grid-cols-2">
+   173→          {preorders.map((p) => {
+   174→            const st = PO_STATUS[p.status] ?? { label: p.status, cls: 'bg-stone-100 text-stone-600 border-stone-200' }
+   175→            const open = expanded.has(p.id)
+   176→            return (
+   177→              <Card key={p.id} className={cn('p-4 transition-shadow', p.status === 'PENDING' && 'ring-1 ring-amber-200')}>
+   178→                <div className="flex items-start gap-3">
+   179→                  <Avatar name={p.salesperson?.name ?? '؟'} color={p.salesperson?.color ?? '#5F7A4E'} size={40} />
+   180→                  <div className="min-w-0 flex-1">
+   181→                    <div className="flex flex-wrap items-center justify-between gap-2">
+   182→                      <span className="truncate text-sm font-bold text-[#253A2A]">
+   183→                        {p.customerName ?? 'مشتری مهمان'}
+   184→                      </span>
+   185→                      <Badge className={st.cls}>{st.label}</Badge>
+   186→                    </div>
+   187→                    <div className="mt-0.5 flex items-center justify-between gap-2">
+   188→                      <span className="truncate text-[11px] text-[#8A9884]">فروشنده: {p.salesperson?.name ?? '—'}</span>
+   189→                      <TimeAgo iso={p.createdAt} />
+   190→                    </div>
+   191→                  </div>
+   192→                </div>
+   193→
+   194→                {/* items expandable */}
+   195→                <button
+   196→                  onClick={() => toggleExpand(p.id)}
+   197→                  className="mt-3 flex min-h-[36px] w-full items-center justify-between rounded-xl bg-[#F5F2E8] px-3 py-1.5 text-xs font-semibold text-[#4A5A44] transition hover:bg-[#EFF5EA]"
+   198→                  aria-expanded={open}
+   199→                >
+   200→                  <span>اقلام سفارش ({toFaDigits(p.items.length)} قلم)</span>
+   201→                  {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+   202→                </button>
+   203→                {open && (
+   204→                  <div className="pz-scroll mt-2 max-h-44 space-y-1.5 overflow-y-auto rounded-xl border border-[#EFEAD8] bg-white p-2.5">
+   205→                    {p.items.map((it, i) => (
+   206→                      <div key={i} className="flex items-center justify-between gap-2 text-xs">
+   207→                        <span className="min-w-0 flex-1 truncate text-[#33402F]">{it.name}</span>
+   208→                        <span className="shrink-0 text-[#8A9884]">× {toFaDigits(it.qty)}</span>
+   209→                        <Money value={it.qty * it.sellPrice} className="shrink-0 font-semibold text-[#3E6B4A]" />
+   210→                      </div>
+   211→                    ))}
+   212→                  </div>
+   213→                )}
+   214→
+   215→                {p.note && (
+   216→                  <p className="mt-2 rounded-lg bg-[#FBF4DE] px-2.5 py-1.5 text-[11px] text-[#6B5A20]">📝 {p.note}</p>
+   217→                )}
+   218→
+   219→                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[#EFEAD8] pt-3">
+   220→                  <div>
+   221→                    <span className="block text-[10px] text-[#8A9884]">مبلغ کل</span>
+   222→                    <Money value={p.total} className="text-base font-black text-[#3E6B4A]" />
+   223→                  </div>
+   224→                  {isCashier && p.status === 'PENDING' && (
+   225→                    <div className="flex flex-col items-stretch gap-1">
+   226→                      <PrimaryButton onClick={() => act(p, 'prepare')} className="min-h-[44px]">
+   227→                        آماده‌سازی شد
+   228→                      </PrimaryButton>
+   229→                      <span className="text-[10px] text-[#8A9884]">محصولات را کنار صندوق بگذار</span>
+   230→                    </div>
+   231→                  )}
+   232→                  {isCashier && p.status === 'PREPARED' && (
+   233→                    <div className="flex flex-col items-stretch gap-1">
+   234→                      <GoldButton onClick={() => act(p, 'done')} className="min-h-[44px]">
+   235→                        تسویه/چاپ شد ✓
+   236→                      </GoldButton>
+   237→                      <span className="text-[10px] text-[#8A9884]">در Holoo اسکن و رسید چاپ شد</span>
+   238→                    </div>
+   239→                  )}
+   240→                  {p.cashier && (p.status === 'PREPARED' || p.status === 'DONE') && (
+   241→                    <span className="text-[10px] text-[#8A9884]">صندوق‌دار: {p.cashier.name}</span>
+   242→                  )}
+   243→                </div>
+   244→              </Card>
+   245→            )
+   246→          })}
+   247→        </div>
+   248→      )}
+   249→
+   250→      <NewPreorderModal
+   251→        open={newOpen}
+   252→        onClose={() => setNewOpen(false)}
+   253→        user={user}
+   254→        onDone={load}
+   255→      />
+   256→    </div>
+   257→  )
+   258→}
+   259→
+   260→/* ---------- new preorder modal (salesperson) ---------- */
+   261→
+   262→function NewPreorderModal({ open, onClose, user, onDone }: {
+   263→  open: boolean; onClose: () => void; user: PUser; onDone: () => Promise<void> | void
+   264→}) {
+   265→  const [customers, setCustomers] = React.useState<Customer[]>([])
+   266→  const [products, setProducts] = React.useState<ProductLite[]>([])
+   267→  const [custId, setCustId] = React.useState<string>('')
+   268→  const [newCustName, setNewCustName] = React.useState('')
+   269→  const [items, setItems] = React.useState<{ productId: number | null; name: string; qty: number; sellPrice: number }[]>([])
+   270→  const [note, setNote] = React.useState('')
+   271→  const [pQuery, setPQuery] = React.useState('')
+   272→  const [saving, setSaving] = React.useState(false)
+   273→
+   274→  React.useEffect(() => {
+   275→    if (!open) return
+   276→    setCustId(''); setNewCustName(''); setItems([]); setNote(''); setPQuery('')
+   277→    api.get<{ customers: Customer[] }>('/api/customers').then((r) => setCustomers(r.customers)).catch(() => {})
+   278→    api.get<{ products: ProductLite[] }>('/api/products?limit=500').then((r) => setProducts(r.products)).catch(() => {})
+   279→  }, [open])
+   280→
+   281→  const filteredProducts = React.useMemo(() => {
+   282→    const q = pQuery.trim().toLowerCase()
+   283→    if (!q) return products.slice(0, 30)
+   284→    return products
+   285→      .filter((p) =>
+   286→        p.name.toLowerCase().includes(q) ||
+   287→        (p.nameFa ?? '').includes(pQuery.trim()) ||
+   288→        (p.barcode ?? '').includes(q))
+   289→      .slice(0, 30)
+   290→  }, [products, pQuery])
+   291→
+   292→  const addProduct = (p: ProductLite) => {
+   293→    setItems((arr) => {
+   294→      const idx = arr.findIndex((x) => x.productId === p.id)
+   295→      if (idx >= 0) {
+   296→        const n = [...arr]
+   297→        n[idx] = { ...n[idx], qty: n[idx].qty + 1 }
+   298→        return n
+   299→      }
+   300→      return [...arr, { productId: p.id, name: p.name, qty: 1, sellPrice: p.sellPrice }]
+   301→    })
+   302→  }
+   303→
+   304→  const setQty = (i: number, d: number) => {
+   305→    setItems((arr) => arr
+   306→      .map((x, j) => (j === i ? { ...x, qty: Math.max(0, x.qty + d) } : x))
+   307→      .filter((x) => x.qty > 0))
+   308→  }
+   309→
+   310→  const total = items.reduce((s, it) => s + it.qty * it.sellPrice, 0)
+   311→
+   312→  const submit = async () => {
+   313→    if (items.length === 0) { toast.error('حداقل یک قلم کالا اضافه کنید'); return }
+   314→    if (!custId && !newCustName.trim()) { toast.error('مشتری را انتخاب کنید یا نام مشتری جدید را بنویسید'); return }
+   315→    setSaving(true)
+   316→    try {
+   317→      const cid = custId ? Number(custId) : undefined
+   318→      const customerName = custId
+   319→        ? customers.find((c) => c.id === Number(custId))?.name ?? null
+   320→        : newCustName.trim()
+   321→      await api.post('/api/preorders', {
+   322→        customerId: cid ?? undefined,
+   323→        customerName,
+   324→        salespersonId: user.id,
+   325→        items: items.map((it) => ({ productId: it.productId, name: it.name, qty: it.qty, sellPrice: it.sellPrice })),
+   326→        note: note.trim() || undefined,
+   327→      })
+   328→      toast.success('پیش‌صورتحساب ثبت شد — صندوق‌داران مطلع شدند ✅')
+   329→      onClose()
+   330→      await onDone()
+   331→    } catch (e) {
+   332→      toast.error(e instanceof Error ? e.message : 'ثبت ناموفق بود')
+   333→    } finally {
+   334→      setSaving(false)
+   335→    }
+   336→  }
+   337→
+   338→  return (
+   339→    <Modal open={open} onClose={onClose} title="پیش‌صورتحساب جدید" wide>
+   340→      <div className="space-y-4">
+   341→        {/* customer */}
+   342→        <div className="grid gap-3 sm:grid-cols-2">
+   343→          <Field label="مشتری" required>
+   344→            <select value={custId} onChange={(e) => setCustId(e.target.value)} className={inputCls}>
+   345→              <option value="">— مشتری جدید / انتخاب کنید —</option>
+   346→              {customers.map((c) => (
+   347→                <option key={c.id} value={c.id}>{c.name}{c.phone ? ` — ${c.phone}` : ''}</option>
+   348→              ))}
+   349→            </select>
+   350→          </Field>
+   351→          <Field label="یا نام مشتری جدید" hint="اگر مشتری در فهرست نیست، نامش را بنویسید">
+   352→            <input
+   353→              value={newCustName}
+   354→              onChange={(e) => { setNewCustName(e.target.value); if (e.target.value) setCustId('') }}
+   355→              placeholder="مثلاً: خانم رضایی"
+   356→              className={inputCls}
+   357→              disabled={!!custId}
+   358→            />
+   359→          </Field>
+   360→        </div>
+   361→
+   362→        {/* product picker */}
+   363→        <div>
+   364→          <div className="mb-2 flex items-center gap-2 rounded-xl border border-[#D8D2BC] bg-white px-3">
+   365→            <Search size={15} className="shrink-0 text-[#8A9884]" />
+   366→            <input
+   367→              value={pQuery}
+   368→              onChange={(e) => setPQuery(e.target.value)}
+   369→              placeholder="جستجوی محصول (نام یا بارکد)…"
+   370→              className="min-h-[44px] w-full bg-transparent text-sm outline-none placeholder:text-[#A8A28C]"
+   371→              aria-label="جستجوی محصول"
+   372→            />
+   373→            <PackageSearch size={15} className="shrink-0 text-[#A8A28C]" />
+   374→          </div>
+   375→          <div className="pz-scroll max-h-48 overflow-y-auto rounded-xl border border-[#E4DCC8] bg-white">
+   376→            {filteredProducts.length === 0 ? (
+   377→              <div className="p-4 text-center text-xs text-[#8A9884]">محصولی یافت نشد</div>
+   378→            ) : filteredProducts.map((p) => (
+   379→              <button
+   380→                key={p.id}
+   381→                onClick={() => addProduct(p)}
+   382→                className="flex w-full items-center justify-between gap-2 border-b border-[#EFEAD8] px-3 py-2 text-right text-xs transition last:border-0 hover:bg-[#F3F7EF]"
+   383→              >
+   384→                <span className="min-w-0 flex-1 truncate font-semibold text-[#33402F]">{p.name}</span>
+   385→                <span className="shrink-0 text-[#8A9884]">{toFaDigits(p.stock)} موجود</span>
+   386→                <Money value={p.sellPrice} className="shrink-0 text-[#3E6B4A]" />
+   387→                <Plus size={14} className="shrink-0 text-[#5F8F55]" />
+   388→              </button>
+   389→            ))}
+   390→          </div>
+   391→        </div>
+   392→
+   393→        {/* selected rows */}
+   394→        {items.length > 0 && (
+   395→          <div className="space-y-2">
+   396→            {items.map((it, i) => (
+   397→              <div key={it.productId ?? it.name} className="flex flex-wrap items-center gap-2 rounded-xl border border-[#E4DCC8] bg-white p-2">
+   398→                <span className="min-w-[120px] flex-1 truncate text-xs font-bold text-[#253A2A]">{it.name}</span>
+   399→                <div className="flex items-center gap-1">
+   400→                  <button onClick={() => setQty(i, -1)} className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#F5F2E8] text-[#4A5A44] transition hover:bg-rose-50 hover:text-rose-600" aria-label="کاهش تعداد">
+   401→                    <Minus size={15} />
+   402→                  </button>
+   403→                  <span className="w-10 text-center text-sm font-black tabular-nums text-[#253A2A]">{toFaDigits(it.qty)}</span>
+   404→                  <button onClick={() => setQty(i, 1)} className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#F5F2E8] text-[#4A5A44] transition hover:bg-[#EFF5EA] hover:text-[#3E6B4A]" aria-label="افزایش تعداد">
+   405→                    <Plus size={15} />
+   406→                  </button>
+   407→                </div>
+   408→                <input
+   409→                  type="number"
+   410→                  min={0}
+   411→                  value={it.sellPrice}
+   412→                  onChange={(e) => setItems((arr) => arr.map((x, j) => (j === i ? { ...x, sellPrice: Number(e.target.value) || 0 } : x)))}
+   413→                  className="w-32 rounded-xl border border-[#D8D2BC] bg-white px-2 py-2 text-left text-xs tabular-nums outline-none focus:border-[#5F8F55] focus:ring-2 focus:ring-[#93C572]/30"
+   414→                  aria-label={`قیمت ${it.name}`}
+   415→                />
+   416→                <Money value={it.qty * it.sellPrice} className="w-28 shrink-0 text-left text-xs font-bold text-[#3E6B4A]" />
+   417→              </div>
+   418→            ))}
+   419→          </div>
+   420→        )}
+   421→
+   422→        <Field label="یادداشت (اختیاری)">
+   423→          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={cn(inputCls, 'resize-none')} placeholder="مثلاً: مشتری بعدازظهر می‌آید" />
+   424→        </Field>
+   425→
+   426→        <div className="flex items-center justify-between gap-3 rounded-2xl bg-[#F5F2E8] px-4 py-3">
+   427→          <span className="flex items-center gap-1.5 text-xs font-semibold text-[#4A5A44]">
+   428→            <Sparkles size={14} className="text-[#B8860B]" /> جمع کل
+   429→          </span>
+   430→          <Money value={total} className="text-lg font-black text-[#3E6B4A]" />
+   431→        </div>
+   432→
+   433→        <div className="flex justify-end gap-2">
+   434→          <GhostButton onClick={onClose} className="min-h-[44px]">انصراف</GhostButton>
+   435→          <PrimaryButton onClick={submit} disabled={saving || items.length === 0} className="min-h-[44px]">
+   436→            {saving ? 'در حال ثبت…' : 'ثبت پیش‌صورتحساب'}
+   437→          </PrimaryButton>
+   438→        </div>
+   439→      </div>
+   440→    </Modal>
+   441→  )
+   442→}
+   443→
+   444→/* ==================== CUSTOMERS ==================== */
+   445→
+   446→function CustomersTab({ canManage }: { canManage: boolean }) {
+   447→  const [customers, setCustomers] = React.useState<Customer[]>([])
+   448→  const [loading, setLoading] = React.useState(true)
+   449→  const [q, setQ] = React.useState('')
+   450→  const [editing, setEditing] = React.useState<Customer | null>(null)
+   451→  const [addOpen, setAddOpen] = React.useState(false)
+   452→
+   453→  const load = React.useCallback(async (query: string) => {
+   454→    try {
+   455→      const r = await api.get<{ customers: Customer[] }>(`/api/customers${query ? `?q=${encodeURIComponent(query)}` : ''}`)
+   456→      setCustomers(r.customers)
+   457→    } catch (e) {
+   458→      toast.error(e instanceof Error ? e.message : 'خطا در دریافت مشتریان')
+   459→    } finally {
+   460→      setLoading(false)
+   461→    }
+   462→  }, [])
+   463→
+   464→  React.useEffect(() => {
+   465→    setLoading(true)
+   466→    const t = setTimeout(() => load(q), q ? 350 : 0)
+   467→    return () => clearTimeout(t)
+   468→  }, [q, load])
+   469→
+   470→  const prefsOf = (c: Customer): string[] =>
+   471→    (c.preference ?? '').split(/،|,/).map((s) => s.trim()).filter(Boolean)
+   472→
+   473→  return (
+   474→    <div>
+   475→      <div className="mb-4 flex flex-wrap items-center gap-2">
+   476→        <div className="flex min-w-[220px] flex-1 items-center gap-2 rounded-xl border border-[#D8D2BC] bg-white px-3">
+   477→          <Search size={15} className="shrink-0 text-[#8A9884]" />
+   478→          <input
+   479→            value={q}
+   480→            onChange={(e) => setQ(e.target.value)}
+   481→            placeholder="جستجو بر اساس نام یا شماره تماس…"
+   482→            className="min-h-[44px] w-full bg-transparent text-sm outline-none placeholder:text-[#A8A28C]"
+   483→            aria-label="جستجوی مشتری"
+   484→          />
+   485→        </div>
+   486→        {canManage && (
+   487→          <PrimaryButton onClick={() => setAddOpen(true)} className="min-h-[44px]">
+   488→            <Plus size={16} /> مشتری جدید
+   489→          </PrimaryButton>
+   490→        )}
+   491→      </div>
+   492→
+   493→      {loading ? <Loading /> : customers.length === 0 ? (
+   494→        <EmptyState
+   495→          icon={<Users size={38} />}
+   496→          title={q ? 'مشتری‌ای با این جستجو پیدا نشد' : 'هنوز مشتری وفاداری ثبت نشده'}
+   497→          hint={canManage ? 'با دکمه «مشتری جدید» اولین مشتری را اضافه کنید' : undefined}
+   498→        />
+   499→      ) : (
+   500→        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+   501→          {customers.map((c) => (
+   502→            <Card key={c.id} className="p-4">
+   503→              <div className="flex items-start justify-between gap-2">
+   504→                <div className="flex items-center gap-2.5">
+   505→                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#F3F7EF] to-[#EAD9A8] text-[#3E6B4A]">
+   506→                    <UserRound size={18} />
+   507→                  </div>
+   508→                  <div className="min-w-0">
+   509→                    <div className="truncate text-sm font-bold text-[#253A2A]">{c.name}</div>
+   510→                    {c.phone && (
+   511→                      <div className="flex items-center gap-1 text-[11px] tabular-nums text-[#8A9884]">
+   512→                        <Phone size={11} /> {toFaDigits(c.phone)}
+   513→                      </div>
+   514→                    )}
+   515→                  </div>
+   516→                </div>
+   517→                {canManage && (
+   518→                  <button
+   519→                    onClick={() => setEditing(c)}
+   520→                    className="flex h-11 w-11 items-center justify-center rounded-xl text-[#8A9884] transition hover:bg-[#F3F7EF] hover:text-[#3E6B4A]"
+   521→                    aria-label={`ویرایش ${c.name}`}
+   522→                  >
+   523→                    <Pencil size={15} />
+   524→                  </button>
+   525→                )}
+   526→              </div>
+   527→              {prefsOf(c).length > 0 && (
+   528→                <div className="mt-3 flex flex-wrap gap-1.5">
+   529→                  {prefsOf(c).map((p, i) => (
+   530→                    <Badge key={i} className="border-[#D8E2D0] bg-[#F3F7EF] text-[#3E6B4A]">🌿 {p}</Badge>
+   531→                  ))}
+   532→                </div>
+   533→              )}
+   534→              <div className="mt-3 border-t border-[#EFEAD8] pt-2">
+   535→                <TimeAgo iso={c.createdAt} />
+   536→              </div>
+   537→            </Card>
+   538→          ))}
+   539→        </div>
+   540→      )}
+   541→
+   542→      <CustomerModal
+   543→        open={addOpen || !!editing}
+   544→        customer={editing}
+   545→        onClose={() => { setAddOpen(false); setEditing(null) }}
+   546→        onDone={() => load(q)}
+   547→      />
+   548→    </div>
+   549→  )
+   550→}
+   551→
+   552→function CustomerModal({ open, customer, onClose, onDone }: {
+   553→  open: boolean; customer: Customer | null; onClose: () => void; onDone: () => void
+   554→}) {
+   555→  const [name, setName] = React.useState('')
+   556→  const [phone, setPhone] = React.useState('')
+   557→  const [preference, setPreference] = React.useState('')
+   558→  const [saving, setSaving] = React.useState(false)
+   559→
+   560→  React.useEffect(() => {
+   561→    if (open) {
+   562→      setName(customer?.name ?? '')
+   563→      setPhone(customer?.phone ?? '')
+   564→      setPreference(customer?.preference ?? '')
+   565→    }
+   566→  }, [open, customer])
+   567→
+   568→  const save = async () => {
+   569→    if (!name.trim()) { toast.error('نام مشتری الزامی است'); return }
+   570→    setSaving(true)
+   571→    try {
+   572→      if (customer) {
+   573→        await api.patch('/api/customers', { id: customer.id, name: name.trim(), phone: phone.trim() || null, preference: preference.trim() || null })
+   574→        toast.success('مشتری ویرایش شد ✅')
+   575→      } else {
+   576→        await api.post('/api/customers', { name: name.trim(), phone: phone.trim() || null, preference: preference.trim() || null })
+   577→        toast.success('مشتری جدید ثبت شد ✅')
+   578→      }
+   579→      onClose()
+   580→      onDone()
+   581→    } catch (e) {
+   582→      toast.error(e instanceof Error ? e.message : 'ذخیره ناموفق بود')
+   583→    } finally {
+   584→      setSaving(false)
+   585→    }
+   586→  }
+   587→
+   588→  return (
+   589→    <Modal open={open} onClose={onClose} title={customer ? 'ویرایش مشتری' : 'مشتری جدید'}>
+   590→      <div className="space-y-3">
+   591→        <Field label="نام مشتری" required>
+   592→          <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} placeholder="مثلاً: خانم رضایی" />
+   593→        </Field>
+   594→        <Field label="شماره تماس" hint="اختیاری — برای تماس و پیگیری">
+   595→          <input value={phone} onChange={(e) => setPhone(e.target.value)} className={cn(inputCls, 'text-left')} placeholder="۰۹۱۲…" dir="ltr" />
+   596→        </Field>
+   597→        <Field label="سلیقه‌ها / ترجیحات" hint="با «،» جدا کنید — مثلاً: پنیر لیقوان، ماست کم‌چرب، نان سنگک">
+   598→          <textarea value={preference} onChange={(e) => setPreference(e.target.value)} rows={2} className={cn(inputCls, 'resize-none')} />
+   599→        </Field>
+   600→        <div className="flex justify-end gap-2 pt-1">
+   601→          <GhostButton onClick={onClose} className="min-h-[44px]">انصراف</GhostButton>
+   602→          <PrimaryButton onClick={save} disabled={saving} className="min-h-[44px]">{saving ? '…' : 'ذخیره'}</PrimaryButton>
+   603→        </div>
+   604→      </div>
+   605→    </Modal>
+   606→  )
+   607→}
+   608→

@@ -1,0 +1,569 @@
+     1→     1→'use client'
+     2→     2→import * as React from 'react'
+     3→     3→import { toast } from 'sonner'
+     4→     4→import { Truck, Pencil, Plus, ChevronLeft, Phone, Package, Boxes, Building2, ArrowRight, Search, History, FileSpreadsheet } from 'lucide-react'
+     5→     5→import { api, downloadFile } from '@/lib/api'
+     6→     6→import { isoToJalali, toFaDigits } from '@/lib/jalali'
+     7→     7→import { hasRole, type PUser, type SupplierT, type PriceImportInfo } from '@/lib/types'
+     8→     8→import {
+     9→     9→  Card, SectionHeader, Badge, StockBadge, stockDot, Field, inputCls, PrimaryButton, GoldButton,
+    10→    10→  GhostButton, EmptyState, Loading, Modal, Money, ProductImage, Spinner, TimeAgo,
+    11→    11→} from './kit'
+    12→    12→
+    13→    13→/* ---------- local types ---------- */
+    14→    14→type CompanyMini = { id: number; name: string }
+    15→    15→type CompanyProduct = { id: number; name: string; stock: number; minStock: number; sellPrice: number; imageUrl: string | null; active: boolean }
+    16→    16→type CompanyRow = {
+    17→    17→  id: number
+    18→    18→  name: string
+    19→    19→  note?: string | null
+    20→    20→  products: CompanyProduct[]
+    21→    21→  suppliers?: { supplier: { id: number; name: string } }[]
+    22→    22→}
+    23→    23→type SupplierRow = SupplierT & {
+    24→    24→  companies?: { company: CompanyMini }[]
+    25→    25→  _count?: { products: number }
+    26→    26→}
+    27→    27→
+    28→    28→const KIND_META: Record<string, { label: string; cls: string }> = {
+    29→    29→  MANUFACTURER: { label: 'تولیدکننده', cls: 'border-[#C8D8C0] bg-[#F3F7EF] text-[#3E6B4A]' },
+    30→    30→  DISTRIBUTOR: { label: 'پخش', cls: 'border-[#EAD9A8] bg-[#FBF3DC] text-[#8A6508]' },
+    31→    31→  BOTH: { label: 'هردو', cls: 'border-[#D9C9A8] bg-[#F5EFE0] text-[#6B5B2A]' },
+    32→    32→}
+    33→    33→const PAY_LABEL: Record<string, string> = { CASH: 'نقدی', CHEQUE: 'چک', MIXED: 'مختلط' }
+    34→    34→const PAY_CLS: Record<string, string> = {
+    35→    35→  CASH: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    36→    36→  CHEQUE: 'border-amber-200 bg-amber-50 text-amber-700',
+    37→    37→  MIXED: 'border-stone-200 bg-stone-100 text-stone-600',
+    38→    38→}
+    39→    39→
+    40→    40→function KindBadge({ kind }: { kind: string }) {
+    41→    41→  const m = KIND_META[kind] ?? { label: kind, cls: 'border-stone-200 bg-stone-100 text-stone-600' }
+    42→    42→  return <Badge className={m.cls}>{m.label}</Badge>
+    43→    43→}
+    44→    44→
+    45→    45→function PayChip({ terms, chequeDays }: { terms: string; chequeDays: number }) {
+    46→    46→  return (
+    47→    47→    <Badge className={PAY_CLS[terms] ?? PAY_CLS.MIXED}>
+    48→    48→      {PAY_LABEL[terms] ?? terms}
+    49→    49→      {terms !== 'CASH' && chequeDays > 0 ? ` · ${toFaDigits(chequeDays)} روزه` : ''}
+    50→    50→    </Badge>
+    51→    51→  )
+    52→    52→}
+    53→    53→
+    54→    54→function CompanyChip({ name }: { name: string }) {
+    55→    55→  return (
+    56→    56→    <span className="inline-flex max-w-36 items-center gap-1.5 rounded-full border border-[#E4DCC8] bg-white py-0.5 pl-2.5 pr-0.5 text-xs font-medium text-[#4A5A44]">
+    57→    57→      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#3E6B4A] to-[#5F8F55] text-[10px] font-bold text-white" title={name}>
+    58→    58→        {name.trim().charAt(0).toUpperCase()}
+    59→    59→      </span>
+    60→    60→      <span className="truncate">{name}</span>
+    61→    61→    </span>
+    62→    62→  )
+    63→    63→}
+    64→    64→
+    65→    65→function Crumb({ label, onClick, active }: { label: string; onClick?: () => void; active?: boolean }) {
+    66→    66→  return (
+    67→    67→    <button
+    68→    68→      type="button"
+    69→    69→      onClick={onClick}
+    70→    70→      disabled={active}
+    71→    71→      className={`rounded-lg px-2 py-1 text-sm font-semibold transition ${active ? 'cursor-default text-[#253A2A]' : 'text-[#5F8F55] hover:bg-[#F3F7EF]'}`}
+    72→    72→    >
+    73→    73→      {label}
+    74→    74→    </button>
+    75→    75→  )
+    76→    76→}
+    77→    77→
+    78→    78→/** product mini-card — same look as ProductsSection (stock number at the bottom, colored) */
+    79→    79→function ProductMiniCard({ p }: { p: CompanyProduct }) {
+    80→    80→  return (
+    81→    81→    <Card className={`flex flex-col gap-2 p-3 ${p.active ? '' : 'opacity-60'}`}>
+    82→    82→      <div className="flex items-start justify-between gap-2">
+    83→    83→        <ProductImage src={p.imageUrl} name={p.name} size={44} />
+    84→    84→        <StockBadge stock={p.stock} minStock={p.minStock} />
+    85→    85→      </div>
+    86→    86→      <div className="truncate text-xs font-bold text-[#253A2A]" title={p.name}>{p.name}</div>
+    87→    87→      <Money value={p.sellPrice} className="text-xs font-bold text-[#8A6508]" />
+    88→    88→      <div className="mt-auto flex items-end justify-between border-t border-[#EFEAD8] pt-1.5">
+    89→    89→        <span className={`text-2xl font-black leading-none tabular-nums ${stockDot(p.stock, p.minStock)}`}>
+    90→    90→          {toFaDigits(Math.floor(p.stock))}
+    91→    91→        </span>
+    92→    92→        <span className="text-[10px] font-medium text-[#8A9884]">موجودی</span>
+    93→    93→      </div>
+    94→    94→    </Card>
+    95→    95→  )
+    96→    96→}
+    97→    97→
+    98→    98→export default function SuppliersSection({ user }: { user: PUser }) {
+    99→    99→  const manage =
+   100→   100→    hasRole(user, 'GENERAL_MANAGER') || hasRole(user, 'PRODUCT_MANAGER') ||
+   101→   101→    hasRole(user, 'OPERATION_MANAGER') || hasRole(user, 'IT_ADMIN')
+   102→   102→  // price-list XLS export — same gate as the API (plus PRODUCT_MANAGER)
+   103→   103→  const canExportPrices =
+   104→   104→    hasRole(user, 'ACCOUNTANT') || hasRole(user, 'GENERAL_MANAGER') ||
+   105→   105→    hasRole(user, 'OWNER') || hasRole(user, 'IT_ADMIN') || hasRole(user, 'PRODUCT_MANAGER')
+   106→   106→
+   107→   107→  const [suppliers, setSuppliers] = React.useState<SupplierRow[]>([])
+   108→   108→  const [companies, setCompanies] = React.useState<CompanyRow[]>([])
+   109→   109→  const [priceImport, setPriceImport] = React.useState<PriceImportInfo | null>(null)
+   110→   110→  const [loading, setLoading] = React.useState(true)
+   111→   111→  const [search, setSearch] = React.useState('')
+   112→   112→
+   113→   113→  /* drill-down: list → supplier → company */
+   114→   114→  const [openSupplier, setOpenSupplier] = React.useState<SupplierRow | null>(null)
+   115→   115→  const [openCompany, setOpenCompany] = React.useState<CompanyRow | null>(null)
+   116→   116→
+   117→   117→  const load = React.useCallback(async () => {
+   118→   118→    setLoading(true)
+   119→   119→    try {
+   120→   120→      const [s, c] = await Promise.all([
+   121→   121→        api.get<{ suppliers: SupplierRow[]; priceImport?: PriceImportInfo | null }>('/api/suppliers'),
+   122→   122→        api.get<{ companies: CompanyRow[] }>('/api/companies'),
+   123→   123→      ])
+   124→   124→      setSuppliers(s.suppliers ?? [])
+   125→   125→      setPriceImport(s.priceImport ?? null)
+   126→   126→      setCompanies(c.companies ?? [])
+   127→   127→    } catch (e) {
+   128→   128→      toast.error(e instanceof Error ? e.message : 'خطا در دریافت تامین‌کنندگان')
+   129→   129→    } finally {
+   130→   130→      setLoading(false)
+   131→   131→    }
+   132→   132→  }, [])
+   133→   133→
+   134→   134→  React.useEffect(() => { void load() }, [load])
+   135→   135→
+   136→   136→  /* ---------- supplier modal ---------- */
+   137→   137→  const [supOpen, setSupOpen] = React.useState(false)
+   138→   138→  const [editingSup, setEditingSup] = React.useState<SupplierRow | null>(null)
+   139→   139→  const [supForm, setSupForm] = React.useState({
+   140→   140→    name: '', kind: 'DISTRIBUTOR', phone: '',
+   141→   141→    paymentTerms: 'CASH', chequeDays: '30', note: '', companyIds: [] as number[],
+   142→   142→  })
+   143→   143→  const [savingSup, setSavingSup] = React.useState(false)
+   144→   144→
+   145→   145→  const openSupplierModal = (s: SupplierRow | null) => {
+   146→   146→    setEditingSup(s)
+   147→   147→    setSupForm({
+   148→   148→      name: s?.name ?? '',
+   149→   149→      kind: s?.kind ?? 'DISTRIBUTOR',
+   150→   150→      phone: s?.phone ?? '',
+   151→   151→      paymentTerms: s?.paymentTerms ?? 'CASH',
+   152→   152→      chequeDays: String(s?.chequeDays ?? 30),
+   153→   153→      note: s?.note ?? '',
+   154→   154→      companyIds: (s?.companies ?? []).map((c) => c.company.id),
+   155→   155→    })
+   156→   156→    setSupOpen(true)
+   157→   157→  }
+   158→   158→
+   159→   159→  const toggleCompany = (id: number) =>
+   160→   160→    setSupForm((f) => ({
+   161→   161→      ...f,
+   162→   162→      companyIds: f.companyIds.includes(id) ? f.companyIds.filter((x) => x !== id) : [...f.companyIds, id],
+   163→   163→    }))
+   164→   164→
+   165→   165→  const saveSupplier = async () => {
+   166→   166→    if (!supForm.name.trim()) { toast.error('نام تامین‌کننده الزامی است'); return }
+   167→   167→    setSavingSup(true)
+   168→   168→    try {
+   169→   169→      const payload = {
+   170→   170→        name: supForm.name.trim(),
+   171→   171→        kind: supForm.kind,
+   172→   172→        phone: supForm.phone.trim() || null,
+   173→   173→        note: supForm.note.trim() || null,
+   174→   174→        paymentTerms: supForm.paymentTerms,
+   175→   175→        chequeDays: Number(supForm.chequeDays) || 0,
+   176→   176→        companyIds: supForm.companyIds,
+   177→   177→        userId: user.id,
+   178→   178→        userName: user.name,
+   179→   179→      }
+   180→   180→      if (editingSup?.id) {
+   181→   181→        await api.patch('/api/suppliers', { id: editingSup.id, ...payload })
+   182→   182→        toast.success('تامین‌کننده بروزرسانی شد')
+   183→   183→      } else {
+   184→   184→        await api.post('/api/suppliers', payload)
+   185→   185→        toast.success('تامین‌کننده جدید ثبت شد')
+   186→   186→      }
+   187→   187→      setSupOpen(false)
+   188→   188→      void load()
+   189→   189→    } catch (e) {
+   190→   190→      toast.error(e instanceof Error ? e.message : 'خطا در ذخیره تامین‌کننده')
+   191→   191→    } finally {
+   192→   192→      setSavingSup(false)
+   193→   193→    }
+   194→   194→  }
+   195→   195→
+   196→   196→  /* ---------- company modal ---------- */
+   197→   197→  const [comOpen, setComOpen] = React.useState(false)
+   198→   198→  const [comName, setComName] = React.useState('')
+   199→   199→  const [savingCom, setSavingCom] = React.useState(false)
+   200→   200→
+   201→   201→  const saveCompany = async () => {
+   202→   202→    if (!comName.trim()) { toast.error('نام شرکت الزامی است'); return }
+   203→   203→    setSavingCom(true)
+   204→   204→    try {
+   205→   205→      await api.post('/api/companies', { name: comName.trim(), userId: user.id, userName: user.name })
+   206→   206→      toast.success('شرکت جدید ثبت شد')
+   207→   207→      setComOpen(false)
+   208→   208→      setComName('')
+   209→   209→      void load()
+   210→   210→    } catch (e) {
+   211→   211→      toast.error(e instanceof Error ? e.message : 'خطا در ثبت شرکت')
+   212→   212→    } finally {
+   213→   213→      setSavingCom(false)
+   214→   214→    }
+   215→   215→  }
+   216→   216→
+   217→   217→  /* ---------- derived ---------- */
+   218→   218→  const PRICE_STALE_MS = 30 * 24 * 3600 * 1000
+   219→   219→  const priceStale = !priceImport || (Date.now() - new Date(priceImport.at).getTime()) > PRICE_STALE_MS
+   220→   220→
+   221→   221→  /* ---------- per-supplier price-list export (gold, round-trips with the import) ---------- */
+   222→   222→  const [exportingId, setExportingId] = React.useState<number | null>(null)
+   223→   223→  const exportPriceList = React.useCallback(async (s: SupplierRow) => {
+   224→   224→    setExportingId(s.id)
+   225→   225→    try {
+   226→   226→      const j = isoToJalali(new Date())
+   227→   227→      const slug = s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/g, '') || `supplier-${s.id}`
+   228→   228→      await downloadFile(`/api/export/price-list?supplierId=${s.id}&userId=${user.id}`, `price-list-${slug}-${j.jy}-${j.jm}.xls`)
+   229→   229→      toast.success(`فهرست قیمت ${s.name} دانلود شد ✓`)
+   230→   230→    } catch (e) {
+   231→   231→      toast.error(e instanceof Error && e.message !== 'Download failed' ? e.message : 'خطا در دریافت فهرست قیمت')
+   232→   232→    } finally {
+   233→   233→      setExportingId(null)
+   234→   234→    }
+   235→   235→  }, [user.id])
+   236→   236→
+   237→   237→  const q = search.trim().toLowerCase()
+   238→   238→  const filteredSuppliers = q
+   239→   239→    ? suppliers.filter((s) => s.name.toLowerCase().includes(q) || (s.companies ?? []).some((c) => c.company.name.toLowerCase().includes(q)))
+   240→   240→    : suppliers
+   241→   241→
+   242→   242→  const supplierCompanies = openSupplier
+   243→   243→    ? (openSupplier.companies ?? []).map((c) => companies.find((x) => x.id === c.company.id)).filter((x): x is CompanyRow => !!x)
+   244→   244→    : []
+   245→   245→
+   246→   246→  /* ---------- render: company products ---------- */
+   247→   247→  if (openSupplier && openCompany) {
+   248→   248→    const lowCount = openCompany.products.filter((p) => p.stock <= p.minStock).length
+   249→   249→    return (
+   250→   250→      <div>
+   251→   251→        <SectionHeader
+   252→   252→          title={openCompany.name}
+   253→   253→          subtitle={`محصولات شرکت ${openCompany.name} — ${toFaDigits(openCompany.products.length)} کالا${lowCount ? ` · ${toFaDigits(lowCount)} کمبود` : ''}`}
+   254→   254→          icon={<Boxes className="h-5 w-5" />}
+   255→   255→          actions={
+   256→   256→            <GhostButton onClick={() => setOpenCompany(null)} className="min-h-[44px]">
+   257→   257→              <ArrowRight className="h-4 w-4" /> بازگشت به {openSupplier.name}
+   258→   258→            </GhostButton>
+   259→   259→          }
+   260→   260→        />
+   261→   261→        <div className="mb-4 flex flex-wrap items-center gap-1 rounded-xl border border-[#E4DCC8] bg-white/80 px-2 py-1.5">
+   262→   262→          <Crumb label="همه تامین‌کنندگان" onClick={() => { setOpenSupplier(null); setOpenCompany(null) }} />
+   263→   263→          <ChevronLeft className="h-4 w-4 text-[#B8B29A]" />
+   264→   264→          <Crumb label={openSupplier.name} onClick={() => setOpenCompany(null)} />
+   265→   265→          <ChevronLeft className="h-4 w-4 text-[#B8B29A]" />
+   266→   266→          <Crumb label={openCompany.name} active />
+   267→   267→        </div>
+   268→   268→        {openCompany.products.length === 0 ? (
+   269→   269→          <EmptyState icon={<Boxes className="h-10 w-10" />} title="این شرکت هنوز کالایی ندارد" />
+   270→   270→        ) : (
+   271→   271→          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4">
+   272→   272→            {openCompany.products.map((p) => <ProductMiniCard key={p.id} p={p} />)}
+   273→   273→          </div>
+   274→   274→        )}
+   275→   275→      </div>
+   276→   276→    )
+   277→   277→  }
+   278→   278→
+   279→   279→  /* ---------- render: supplier companies ---------- */
+   280→   280→  if (openSupplier) {
+   281→   281→    return (
+   282→   282→      <div>
+   283→   283→        <SectionHeader
+   284→   284→          title={openSupplier.name}
+   285→   285→          subtitle="برای دیدن محصولات، شرکت را انتخاب کنید"
+   286→   286→          icon={<Truck className="h-5 w-5" />}
+   287→   287→          actions={
+   288→   288→            <div className="flex gap-2">
+   289→   289→              {manage && (
+   290→   290→                <GhostButton onClick={() => openSupplierModal(openSupplier)} className="min-h-[44px]">
+   291→   291→                  <Pencil className="h-4 w-4" /> ویرایش تامین‌کننده
+   292→   292→                </GhostButton>
+   293→   293→              )}
+   294→   294→              <GhostButton onClick={() => setOpenSupplier(null)} className="min-h-[44px]">
+   295→   295→                <ArrowRight className="h-4 w-4" /> همه تامین‌کنندگان
+   296→   296→              </GhostButton>
+   297→   297→            </div>
+   298→   298→          }
+   299→   299→        />
+   300→   300→        <div className="mb-4 flex flex-wrap items-center gap-1 rounded-xl border border-[#E4DCC8] bg-white/80 px-2 py-1.5">
+   301→   301→          <Crumb label="همه تامین‌کنندگان" onClick={() => setOpenSupplier(null)} />
+   302→   302→          <ChevronLeft className="h-4 w-4 text-[#B8B29A]" />
+   303→   303→          <Crumb label={openSupplier.name} active />
+   304→   304→        </div>
+   305→   305→        {supplierCompanies.length === 0 ? (
+   306→   306→          <EmptyState icon={<Building2 className="h-10 w-10" />} title="شرکتی به این تامین‌کننده متصل نیست" hint="از دکمه ویرایش تامین‌کننده می‌توانید شرکت‌ها را متصل کنید." />
+   307→   307→        ) : (
+   308→   308→          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+   309→   309→            {supplierCompanies.map((c) => {
+   310→   310→              const low = c.products.filter((p) => p.stock <= p.minStock).length
+   311→   311→              return (
+   312→   312→                <Card
+   313→   313→                  key={c.id}
+   314→   314→                  onClick={() => setOpenCompany(c)}
+   315→   315→                  className="flex cursor-pointer items-center gap-3 p-4 transition hover:-translate-y-0.5 hover:border-[#5F8F55] hover:shadow-lg"
+   316→   316→                >
+   317→   317→                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#3E6B4A] to-[#5F8F55] text-lg font-bold text-white" title={c.name}>
+   318→   318→                    {c.name.trim().charAt(0).toUpperCase()}
+   319→   319→                  </span>
+   320→   320→                  <div className="min-w-0 flex-1">
+   321→   321→                    <div className="truncate text-sm font-bold text-[#253A2A]">{c.name}</div>
+   322→   322→                    <div className="mt-0.5 flex flex-wrap gap-1.5 text-[11px]">
+   323→   323→                      <Badge className="border-[#E4DCC8] bg-white text-[#4A5A44]">{toFaDigits(c.products.length)} محصول</Badge>
+   324→   324→                      {low > 0 && <Badge className="border-amber-200 bg-amber-50 text-amber-700">{toFaDigits(low)} کمبود</Badge>}
+   325→   325→                    </div>
+   326→   326→                  </div>
+   327→   327→                  <ChevronLeft className="h-5 w-5 shrink-0 text-[#B8B29A]" />
+   328→   328→                </Card>
+   329→   329→              )
+   330→   330→            })}
+   331→   331→          </div>
+   332→   332→        )}
+   333→   333→      </div>
+   334→   334→    )
+   335→   335→  }
+   336→   336→
+   337→   337→  /* ---------- render: list ---------- */
+   338→   338→  return (
+   339→   339→    <div>
+   340→   340→      <SectionHeader
+   341→   341→        title="تامین‌کنندگان | Suppliers"
+   342→   342→        subtitle="تولیدی‌ها و پخش‌ها، شرکت‌ها و محصولات هرکدام"
+   343→   343→        icon={<Truck className="h-5 w-5" />}
+   344→   344→        actions={
+   345→   345→          manage ? (
+   346→   346→            <>
+   347→   347→              <GhostButton onClick={() => setComOpen(true)} className="min-h-[44px]">
+   348→   348→                <Plus className="h-4 w-4" /> شرکت جدید
+   349→   349→              </GhostButton>
+   350→   350→              <PrimaryButton onClick={() => openSupplierModal(null)} className="min-h-[44px]">
+   351→   351→                <Plus className="h-4 w-4" /> تامین‌کننده جدید
+   352→   352→              </PrimaryButton>
+   353→   353→            </>
+   354→   354→          ) : undefined
+   355→   355→        }
+   356→   356→      />
+   357→   357→
+   358→   358→      {/* price-list recency chip — amber when the last price import is older than 30 days (or never) */}
+   359→   359→      {!loading && (
+   360→   360→        <div className="mb-4 flex flex-wrap items-center gap-2" data-price-recency data-price-stale={priceStale ? '1' : '0'}>
+   361→   361→          <Badge
+   362→   362→            className={priceStale
+   363→   363→              ? 'border-amber-300 bg-amber-50 px-3 py-1.5 text-amber-800'
+   364→   364→              : 'border-[#C8D8C0] bg-[#F3F7EF] px-3 py-1.5 text-[#3E6B4A]'}
+   365→   365→          >
+   366→   366→            <History className="h-3.5 w-3.5 shrink-0" />
+   367→   367→            <span className="font-semibold">
+   368→   368→              فهرست قیمت‌ها: {priceImport ? (
+   369→   369→                <>آخرین ورود <TimeAgo iso={priceImport.at} /> — {priceImport.by}</>
+   370→   370→              ) : (
+   371→   371→                'تاکنون وارد نشده'
+   372→   372→              )}
+   373→   373→            </span>
+   374→   374→            {priceStale && (
+   375→   375→              <span className="font-bold">— ورود فهرست قیمت | Import price list</span>
+   376→   376→            )}
+   377→   377→          </Badge>
+   378→   378→        </div>
+   379→   379→      )}
+   380→   380→
+   381→   381→      <div className="relative mb-4">
+   382→   382→        <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#A8A28C]" />
+   383→   383→        <input
+   384→   384→          value={search}
+   385→   385→          onChange={(e) => setSearch(e.target.value)}
+   386→   386→          placeholder="جستجوی تامین‌کننده یا شرکت…"
+   387→   387→          className={`${inputCls} min-h-[44px] pr-9`}
+   388→   388→          aria-label="جستجوی تامین‌کننده"
+   389→   389→        />
+   390→   390→      </div>
+   391→   391→
+   392→   392→      {loading ? (
+   393→   393→        <Loading label="در حال دریافت تامین‌کنندگان…" />
+   394→   394→      ) : filteredSuppliers.length === 0 ? (
+   395→   395→        <EmptyState icon={<Truck className="h-10 w-10" />} title="تامین‌کننده‌ای پیدا نشد" />
+   396→   396→      ) : (
+   397→   397→        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+   398→   398→          {filteredSuppliers.map((s) => {
+   399→   399→            const lastImport = s.lastPriceImport ?? null
+   400→   400→            const importStale = !lastImport || (Date.now() - new Date(lastImport.at).getTime()) > PRICE_STALE_MS
+   401→   401→            return (
+   402→   402→            <Card key={s.id} className="flex flex-col p-5">
+   403→   403→              <div className="flex items-start justify-between gap-2">
+   404→   404→                <button type="button" onClick={() => setOpenSupplier(s)} className="min-w-0 flex-1 text-right">
+   405→   405→                  <div className="truncate text-base font-bold text-[#253A2A]" title={s.name}>{s.name}</div>
+   406→   406→                  <div className="mt-2 flex flex-wrap gap-1.5">
+   407→   407→                    <KindBadge kind={s.kind} />
+   408→   408→                    <PayChip terms={s.paymentTerms} chequeDays={s.chequeDays} />
+   409→   409→                  </div>
+   410→   410→                </button>
+   411→   411→                {manage && (
+   412→   412→                  <button
+   413→   413→                    type="button"
+   414→   414→                    onClick={() => openSupplierModal(s)}
+   415→   415→                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#E4DCC8] bg-white text-[#4A5A44] transition hover:border-[#5F8F55] hover:text-[#3E6B4A]"
+   416→   416→                    title="ویرایش"
+   417→   417→                    aria-label={`ویرایش ${s.name}`}
+   418→   418→                  >
+   419→   419→                    <Pencil className="h-4 w-4" />
+   420→   420→                  </button>
+   421→   421→                )}
+   422→   422→              </div>
+   423→   423→
+   424→   424→              {s.phone && (
+   425→   425→                <div className="mt-3 flex items-center gap-2 text-xs text-[#4A5A44]" dir="ltr">
+   426→   426→                  <Phone className="h-3.5 w-3.5 text-[#8A9884]" /> <span className="tabular-nums">{s.phone}</span>
+   427→   427→                </div>
+   428→   428→              )}
+   429→   429→              {s.note && <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-[#6B7A66]">{s.note}</p>}
+   430→   430→
+   431→   431→              {(s.companies ?? []).length > 0 && (
+   432→   432→                <div className="mt-3 flex flex-wrap gap-1.5">
+   433→   433→                  {(s.companies ?? []).map((c) => <CompanyChip key={c.company.id} name={c.company.name} />)}
+   434→   434→                </div>
+   435→   435→              )}
+   436→   436→
+   437→   437→              {/* actions row: companies drill-down + per-supplier price-list XLS export (round-trips with the import) */}
+   438→   438→              <div className="mt-auto flex gap-2">
+   439→   439→                <button
+   440→   440→                  type="button"
+   441→   441→                  onClick={() => setOpenSupplier(s)}
+   442→   442→                  className="flex min-h-[44px] min-w-0 flex-1 items-center justify-between gap-2 rounded-xl border border-[#E4DCC8] bg-[#FBF9F3] px-3.5 py-2 text-xs font-semibold text-[#4A5A44] transition hover:border-[#5F8F55] hover:bg-[#F3F7EF]"
+   443→   443→                >
+   444→   444→                  <span className="flex items-center gap-1.5">
+   445→   445→                    <Package className="h-3.5 w-3.5" /> {toFaDigits(s._count?.products ?? 0)} محصول
+   446→   446→                  </span>
+   447→   447→                  <span className="flex items-center text-[#5F8F55]">مشاهده شرکت‌ها <ChevronLeft className="h-4 w-4" /></span>
+   448→   448→                </button>
+   449→   449→                {canExportPrices && (
+   450→   450→                  <button
+   451→   451→                    type="button"
+   452→   452→                    onClick={() => void exportPriceList(s)}
+   453→   453→                    disabled={exportingId === s.id}
+   454→   454→                    className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-1.5 rounded-xl border border-[#EAD9A8] bg-[#FBF6E8] px-3 py-2 text-xs font-bold text-[#8A6508] transition hover:bg-[#F5EDD3] disabled:cursor-not-allowed disabled:opacity-50"
+   455→   455→                    title={`خروجی اکسل فهرست قیمت ${s.name}`}
+   456→   456→                    aria-label={`خروجی اکسل فهرست قیمت ${s.name}`}
+   457→   457→                    data-price-list-export={s.id}
+   458→   458→                  >
+   459→   459→                    {exportingId === s.id ? <Spinner className="h-4 w-4" /> : <FileSpreadsheet className="h-4 w-4" />}
+   460→   460→                    <span className="hidden sm:inline">فهرست قیمت (اکسل)</span>
+   461→   461→                    <span className="sm:hidden">اکسل</span>
+   462→   462→                  </button>
+   463→   463→                )}
+   464→   464→              </div>
+   465→   465→
+   466→   466→              {/* per-supplier stock footer: N items · M low-stock (rose dot when low) + price-import recency */}
+   467→   467→              <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-[#8A9884]" data-supplier-stock-footer>
+   468→   468→                {(s.lowCount ?? 0) > 0 && (
+   469→   469→                  <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-rose-500" />
+   470→   470→                )}
+   471→   471→                <span>
+   472→   472→                  {toFaDigits(s.productsCount ?? s._count?.products ?? 0)} قلم
+   473→   473→                  {' · '}
+   474→   474→                  <span className={(s.lowCount ?? 0) > 0 ? 'font-bold text-rose-600' : ''}>
+   475→   475→                    {toFaDigits(s.lowCount ?? 0)} کم‌موجود
+   476→   476→                  </span>
+   477→   477→                </span>
+   478→   478→                <span aria-hidden>·</span>
+   479→   479→                <span
+   480→   480→                  className={importStale ? 'font-semibold text-amber-700' : 'font-semibold text-[#3E6B4A]'}
+   481→   481→                  data-supplier-price-recency={s.id}
+   482→   482→                  data-stale={importStale ? '1' : '0'}
+   483→   483→                  title={lastImport ? `آخرین ورود فهرست قیمت توسط ${lastImport.by}` : 'هنوز فهرست قیمتی برای این تأمین‌کننده وارد نشده'}
+   484→   484→                >
+   485→   485→                  آخرین فهرست: {lastImport ? <TimeAgo iso={lastImport.at} /> : 'ثبت نشده'}
+   486→   486→                </span>
+   487→   487→              </div>
+   488→   488→            </Card>
+   489→   489→            )
+   490→   490→          })}
+   491→   491→        </div>
+   492→   492→      )}
+   493→   493→
+   494→   494→      {/* ---------- supplier modal ---------- */}
+   495→   495→      <Modal open={supOpen} onClose={() => setSupOpen(false)} wide title={editingSup ? `ویرایش: ${editingSup.name}` : 'تامین‌کننده جدید'}>
+   496→   496→        <div className="space-y-3">
+   497→   497→          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+   498→   498→            <Field label="نام" required>
+   499→   499→              <input value={supForm.name} onChange={(e) => setSupForm((f) => ({ ...f, name: e.target.value }))} className={inputCls} placeholder="پخش زیتون کرمان" />
+   500→   500→            </Field>
+   501→   501→            <Field label="نوع">
+   502→   502→              <select value={supForm.kind} onChange={(e) => setSupForm((f) => ({ ...f, kind: e.target.value }))} className={inputCls}>
+   503→   503→                <option value="MANUFACTURER">تولیدکننده</option>
+   504→   504→                <option value="DISTRIBUTOR">پخش</option>
+   505→   505→                <option value="BOTH">هردو</option>
+   506→   506→              </select>
+   507→   507→            </Field>
+   508→   508→            <Field label="تلفن">
+   509→   509→              <input value={supForm.phone} onChange={(e) => setSupForm((f) => ({ ...f, phone: e.target.value }))} className={inputCls} dir="ltr" placeholder="034-…" />
+   510→   510→            </Field>
+   511→   511→            <Field label="شرایط پرداخت">
+   512→   512→              <select value={supForm.paymentTerms} onChange={(e) => setSupForm((f) => ({ ...f, paymentTerms: e.target.value }))} className={inputCls}>
+   513→   513→                <option value="CASH">نقدی</option>
+   514→   514→                <option value="CHEQUE">چک</option>
+   515→   515→                <option value="MIXED">مختلط</option>
+   516→   516→              </select>
+   517→   517→            </Field>
+   518→   518→            <Field label="روزهای چک">
+   519→   519→              <input type="number" min={0} value={supForm.chequeDays} onChange={(e) => setSupForm((f) => ({ ...f, chequeDays: e.target.value }))} className={inputCls} dir="ltr" />
+   520→   520→            </Field>
+   521→   521→            <Field label="یادداشت">
+   522→   522→              <input value={supForm.note} onChange={(e) => setSupForm((f) => ({ ...f, note: e.target.value }))} className={inputCls} />
+   523→   523→            </Field>
+   524→   524→          </div>
+   525→   525→          <Field label="شرکت‌های این تامین‌کننده">
+   526→   526→            <div className="max-h-40 overflow-y-auto pz-scroll rounded-xl border border-[#E4DCC8] bg-white p-2">
+   527→   527→              <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+   528→   528→                {companies.map((c) => (
+   529→   529→                  <label key={c.id} className="flex min-h-[36px] cursor-pointer items-center gap-2 rounded-lg px-2 text-sm text-[#33402F] hover:bg-[#F3F7EF]">
+   530→   530→                    <input
+   531→   531→                      type="checkbox"
+   532→   532→                      checked={supForm.companyIds.includes(c.id)}
+   533→   533→                      onChange={() => toggleCompany(c.id)}
+   534→   534→                      className="h-4 w-4 accent-[#3E6B4A]"
+   535→   535→                    />
+   536→   536→                    {c.name}
+   537→   537→                  </label>
+   538→   538→                ))}
+   539→   539→                {companies.length === 0 && <span className="p-2 text-xs text-[#8A9884]">شرکتی ثبت نشده است.</span>}
+   540→   540→              </div>
+   541→   541→            </div>
+   542→   542→          </Field>
+   543→   543→          <div className="flex justify-end gap-2 border-t border-[#EFEAD8] pt-3">
+   544→   544→            <GhostButton onClick={() => setSupOpen(false)} className="min-h-[44px]">انصراف</GhostButton>
+   545→   545→            <PrimaryButton onClick={() => void saveSupplier()} disabled={savingSup} className="min-h-[44px]">
+   546→   546→              {savingSup ? <Spinner /> : <Plus className="h-4 w-4" />} ذخیره
+   547→   547→            </PrimaryButton>
+   548→   548→          </div>
+   549→   549→        </div>
+   550→   550→      </Modal>
+   551→   551→
+   552→   552→      {/* ---------- company modal ---------- */}
+   553→   553→      <Modal open={comOpen} onClose={() => setComOpen(false)} title="شرکت / برند جدید">
+   554→   554→        <div className="space-y-3">
+   555→   555→          <Field label="نام شرکت" required>
+   556→   556→            <input value={comName} onChange={(e) => setComName(e.target.value)} className={inputCls} placeholder="Kalleh" />
+   557→   557→          </Field>
+   558→   558→          <div className="flex justify-end gap-2 border-t border-[#EFEAD8] pt-3">
+   559→   559→            <GhostButton onClick={() => setComOpen(false)} className="min-h-[44px]">انصراف</GhostButton>
+   560→   560→            <GoldButton onClick={() => void saveCompany()} disabled={savingCom} className="min-h-[44px]">
+   561→   561→              {savingCom ? <Spinner /> : <Plus className="h-4 w-4" />} ثبت شرکت
+   562→   562→            </GoldButton>
+   563→   563→          </div>
+   564→   564→        </div>
+   565→   565→      </Modal>
+   566→   566→    </div>
+   567→   567→  )
+   568→   568→}
+   569→   569→

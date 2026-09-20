@@ -1,0 +1,371 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-vazir: var(--font-vazirmatn), 'Vazirmatn', 'Segoe UI', Tahoma, sans-serif;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* ==================== HYPER ZEYTOON DESIGN SYSTEM ==================== */
+
+:root {
+  --pz-olive: #3E6B4A;
+  --pz-olive-dark: #2F4A36;
+  --pz-pistachio: #93C572;
+  --pz-gold: #B8860B;
+  --pz-gold-light: #DAA520;
+  --pz-cream: #FAF7EF;
+  --pz-sand: #F5F2E8;
+  --pz-ink: #253A2A;
+}
+
+body {
+  background: var(--pz-cream);
+}
+
+/* Animated glowing border (paisley gold shimmer) */
+.pz-glow-border {
+  background: linear-gradient(120deg, #d8c98d, #b8860b, #93c572, #b8860b, #d8c98d);
+  background-size: 300% 300%;
+  animation: pz-shimmer 6s ease-in-out infinite;
+}
+@keyframes pz-shimmer {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+/* Luxury page background: cream + faint paisley */
+.pz-page-bg {
+  background-color: var(--pz-cream);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cg fill='none' stroke='%236B7A3A' stroke-width='1' opacity='0.05'%3E%3Cpath d='M78 18c14 2 24 14 24 28 0 17-13 30-30 30-14 0-26-10-26-24 0-11 8-20 19-20 8 0 15 6 15 14 0 6-5 11-11 11'/%3E%3Cpath d='M78 18c-8-1-16 2-21 8'/%3E%3Ccircle cx='70' cy='52' r='3.5'/%3E%3Cpath d='M18 86c2-9 10-15 19-14 8 1 14 8 13 16-1 7-7 12-14 11-6-1-10-6-9-12 1-5 5-8 10-7'/%3E%3Ccircle cx='36' cy='88' r='2.5'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* Dark olive sidebar with girih pattern */
+.pz-sidebar {
+  background-color: var(--pz-olive-dark);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96' viewBox='0 0 96 96'%3E%3Cg fill='none' stroke='%23DAA520' stroke-width='0.7' opacity='0.10'%3E%3Cpath d='M48 8 60 36 88 48 60 60 48 88 36 60 8 48 36 36Z'/%3E%3Cpath d='M48 22 56 40 74 48 56 56 48 74 40 56 22 48 40 40Z'/%3E%3Crect x='38' y='38' width='20' height='20' transform='rotate(45 48 48)'/%3E%3Ccircle cx='48' cy='48' r='6'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* Gold gradient headline text */
+.pz-gold-text {
+  background: linear-gradient(120deg, #8a6508, #dab54d 40%, #8a6508 60%, #dab54d);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: pz-goldslide 5s linear infinite;
+}
+@keyframes pz-goldslide {
+  to { background-position: 200% center; }
+}
+
+/* Custom scrollbar */
+.pz-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.pz-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.pz-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #c8d8c0, #93c572);
+  border-radius: 8px;
+}
+.pz-scroll::-webkit-scrollbar-thumb:hover {
+  background: #7ab05e;
+}
+
+/* Pulse dot for live indicators */
+.pz-pulse {
+  animation: pz-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes pz-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+/* Task card hover lift */
+.pz-lift {
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.pz-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px -8px rgba(62, 107, 74, 0.35);
+}
+
+/* Stock urgency colors on product cards */
+.pz-stock-ok { color: #16a34a; }
+.pz-stock-low { color: #d97706; }
+.pz-stock-critical { color: #dc2626; }
+
+/* Barcode mono font */
+.pz-barcode {
+  font-family: ui-monospace, 'Courier New', monospace;
+  letter-spacing: 0.06em;
+}
+
+/* Loading skeleton shimmer (cream/stone sweep) — reuses the pz-shimmer keyframes */
+.pz-skeleton {
+  background: linear-gradient(100deg, #f5f2e8 32%, #fbf9f1 48%, #e9e2cf 64%, #f5f2e8 80%);
+  background-size: 200% 100%;
+  animation: pz-shimmer 1.6s ease-in-out infinite;
+  border-radius: 0.75rem;
+  will-change: background-position;
+}
+/* dark-mode variant (future-proof: .dark is defined but no theme toggle yet) */
+.dark .pz-skeleton {
+  background: linear-gradient(100deg, #292524 32%, #3f3a34 48%, #4a443c 64%, #292524 80%);
+  background-size: 200% 100%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pz-skeleton {
+    animation: none;
+  }
+}
+
+/* Scan-in delivery box: animated scanner line sweeping at the input's start edge.
+   CSS-only; hidden entirely for reduced-motion users. */
+.pz-scanline {
+  position: absolute;
+  top: 22%;
+  bottom: 22%;
+  width: 3px;
+  border-radius: 9999px;
+  background: linear-gradient(180deg, transparent, #daa520 28%, #b8860b 50%, #daa520 72%, transparent);
+  box-shadow: 0 0 8px 1px rgba(218, 165, 32, 0.45);
+  animation: pz-scan-sweep 2.2s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes pz-scan-sweep {
+  0%, 100% { transform: translateY(-3px); opacity: 0.5; }
+  50% { transform: translateY(3px); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pz-scanline {
+    display: none;
+  }
+}
+
+/* Scan miss / invalid code feedback shake (respects prefers-reduced-motion) */
+.pz-shake {
+  animation: pz-shake 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+@keyframes pz-shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-4px); }
+  40%, 60% { transform: translateX(4px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pz-shake {
+    animation: none;
+  }
+}
+
+/* Camera viewfinder (BarcodeDetector modal): gold laser beam sweeping
+   vertically inside the scan frame. Static at mid-height for reduced-motion. */
+.pz-cam-beam {
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  top: 8%;
+  height: 2px;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, transparent, #daa520 20%, #f2d989 50%, #daa520 80%, transparent);
+  box-shadow: 0 0 14px 2px rgba(218, 165, 32, 0.5);
+  animation: pz-cam-sweep 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes pz-cam-sweep {
+  0%, 100% { top: 8%; opacity: 0.4; }
+  50% { top: 86%; opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pz-cam-beam {
+    animation: none;
+    top: 50%;
+    opacity: 0.65;
+  }
+}
+
+/* Scan-stats panel entrance (chip toggle) — motion-safe: no animation at all
+   for prefers-reduced-motion users. */
+@keyframes pz-panel-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .pz-panel-in {
+    animation: pz-panel-in 200ms ease-out both;
+  }
+}
+
+/* Receive-via-scan: brief gold ring flash on the first qty row (1.5s fade) —
+   motion-safe. */
+@keyframes pz-focus-flash {
+  0% { box-shadow: 0 0 0 3px rgba(218, 165, 32, 0.55); }
+  100% { box-shadow: 0 0 0 3px rgba(218, 165, 32, 0); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .pz-focus-flash {
+    animation: pz-focus-flash 1.5s ease-out both;
+  }
+}
+
+/* Stale price-list nudge banner: soft gold fade + rise on mount (motion-safe) */
+.pz-banner-in {
+  animation: pz-banner-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes pz-banner-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pz-banner-in {
+    animation: none;
+  }
+}
+
+/* ==================== PRINT (Purchase Order sheet) ==================== */
+.pz-print-only {
+  display: none;
+}
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .pz-print-only,
+  .pz-print-only * {
+    visibility: visible;
+  }
+  .pz-print-only {
+    display: block !important;
+    position: absolute;
+    inset: 0;
+    background: #fff;
+    color: #111;
+    z-index: 9999;
+  }
+  .pz-print-only table {
+    page-break-inside: auto;
+  }
+  .pz-print-only tr {
+    page-break-inside: avoid;
+  }
+}

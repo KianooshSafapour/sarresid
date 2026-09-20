@@ -1,0 +1,19 @@
+0000000000000000000000000000000000000000 064678ea127a9a5b8241368a7200467e2cd870e0 Z User <z@container> 1789067797 +0000	commit (initial): Initial commit
+064678ea127a9a5b8241368a7200467e2cd870e0 b8cfd379c48ce1963e69bdd594ffc9b235434ce1 Z User <z@container> 1789073912 +0000	commit: cd3f2d61-e172-45e3-852f-2abdaa1f5171
+b8cfd379c48ce1963e69bdd594ffc9b235434ce1 3e9adbb911c41d95706ff9af9e8207dfc0a007c7 Z User <z@container> 1789074642 +0000	commit: 42f8fd8f-a651-498b-990c-93d8e8c1386a
+3e9adbb911c41d95706ff9af9e8207dfc0a007c7 05991c6fba668be09b4b7dc3d06e4710d3ba9e55 Z User <z@container> 1789076382 +0000	commit: 84a30718-fb9d-41fb-a208-fdfb05ce1354
+05991c6fba668be09b4b7dc3d06e4710d3ba9e55 88cae92648e16d07cedc895813e055a0c0a3abdc Z User <z@container> 1789079016 +0000	commit: a91cedb1-e4ca-411f-97f9-191a7086b0fc
+88cae92648e16d07cedc895813e055a0c0a3abdc e3c42f791f6887369c2855cb2020417fdb2345d5 Z User <z@container> 1789081920 +0000	commit: 98f83fd2-a2f9-4331-9f24-f6dae6f322af
+e3c42f791f6887369c2855cb2020417fdb2345d5 02b28f6db8fb8af66db36081678996307006ba86 Z User <z@container> 1789083411 +0000	commit: 387440b1-8141-4e59-b5a8-1ed3463e2425
+02b28f6db8fb8af66db36081678996307006ba86 52688f11e0c38233ed0c92fbd1daee65abe90ba8 Z User <z@container> 1789084606 +0000	commit: 722f8404-99d9-49ec-a02b-103326601dee
+52688f11e0c38233ed0c92fbd1daee65abe90ba8 b02d075a81778a7f147cb479baa08220ee829054 Z User <z@container> 1789086329 +0000	commit: 6a292a4d-6956-424a-9c35-0a156974af45
+b02d075a81778a7f147cb479baa08220ee829054 e35926f52c15da503a4fb7e870e584d2059affd4 Z User <z@container> 1789087835 +0000	commit: 295555cb-683f-4151-84d9-b60b1d3ae8a3
+e35926f52c15da503a4fb7e870e584d2059affd4 8eab0cdf202cb7b82d6478b7a0c51910cf7f868a Z User <z@container> 1789088760 +0000	commit: a286b8c8-4e16-4d2d-ab35-bd41d59894ed
+8eab0cdf202cb7b82d6478b7a0c51910cf7f868a 674675bb15dc52049e211d2135f8645f3d4b40ae Z User <z@container> 1789090564 +0000	commit: 59c42266-8bdb-4f32-9037-b424a5598b97
+674675bb15dc52049e211d2135f8645f3d4b40ae 58885ce59dba7a3a40b6c857b2952b725a26e8c9 Z User <z@container> 1789152606 +0000	commit (amend): 59c42266-8bdb-4f32-9037-b424a5598b97
+58885ce59dba7a3a40b6c857b2952b725a26e8c9 9664a07ca4fd8e7422782a35eb9d04ea5d0bbcd5 Z User <z@container> 1789153811 +0000	commit: v0.1-alpha 'Hello, World' — stable restore point of Hyper Zeytoon platform (all 16 modules verified)
+9664a07ca4fd8e7422782a35eb9d04ea5d0bbcd5 680cf95baf18dfe00f9df3a3b82c2c25396692ff Z User <z@container> 1789156370 +0000	commit: v0.2-alpha: restore-point system, academic research module (14 citations), demo company simulator, cultural SVG set
+680cf95baf18dfe00f9df3a3b82c2c25396692ff 8ba6be3bcd7f3dc156abe69f6eb44e741b18535b Z User <z@container> 1789170753 +0000	commit (amend): v0.2-alpha: restore-point system, academic research module (14 citations), demo company simulator, cultural SVG set
+8ba6be3bcd7f3dc156abe69f6eb44e741b18535b a41638fada107e96e11e3597d981de27504525ef Z User <z@container> 1789467534 +0000	commit (amend): v0.2-alpha: restore-point system, academic research module (14 citations), demo company simulator, cultural SVG set
+a41638fada107e96e11e3597d981de27504525ef 8cc2ab7b3dc966a36e333f5cc444a6e8b745f710 Z User <z@container> 1789501982 +0000	commit (amend): v0.2-alpha: restore-point system, academic research module (14 citations), demo company simulator, cultural SVG set
+8cc2ab7b3dc966a36e333f5cc444a6e8b745f710 680f42b44dae64a444321fc75cce001d0ce7e4ad Z User <z@container> 1789926839 +0000	commit (amend): v0.2-alpha: restore-point system, academic research module (14 citations), demo company simulator, cultural SVG set

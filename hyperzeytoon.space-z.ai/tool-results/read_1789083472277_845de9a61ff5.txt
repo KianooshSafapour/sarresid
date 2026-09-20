@@ -1,0 +1,891 @@
+     1→'use client'
+     2→
+     3→import * as React from 'react'
+     4→import { api } from '@/lib/api'
+     5→import { useApp } from '@/store/app'
+     6→import {
+     7→  SectionHeader, StatCard, EmptyState, LoadingBlock, StatusBadge, ChipSelect,
+     8→  OrnateDivider, AnimatedCount, ConfirmButton,
+     9→} from '@/components/platform/ui/shared'
+    10→import { BarcodeInput } from '@/components/platform/ui/barcode-input'
+    11→import { money, moneyCompact, toFaDigits, formatJalaliDateTime, timeAgo } from '@/lib/jalali'
+    12→import { Button } from '@/components/ui/button'
+    13→import { Input } from '@/components/ui/input'
+    14→import { Textarea } from '@/components/ui/textarea'
+    15→import { Progress } from '@/components/ui/progress'
+    16→import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+    17→import { useToast } from '@/hooks/use-toast'
+    18→import { cn } from '@/lib/utils'
+    19→import {
+    20→  ClipboardList, Play, PackageCheck, AlertTriangle, TrendingDown, TrendingUp, Search,
+    21→  FileSpreadsheet, Loader2, CheckCircle2, Ban, ScanLine, ListFilter, History, Minus, Plus,
+    22→  ShoppingCart,
+    23→} from 'lucide-react'
+    24→
+    25→// ---------- types ----------
+    26→interface SessionRow {
+    27→  id: string
+    28→  code: string
+    29→  status: 'IN_PROGRESS' | 'COMMITTED' | 'CANCELLED' | string
+    30→  scope: 'ALL' | 'CATEGORY' | string
+    31→  category?: string | null
+    32→  note?: string | null
+    33→  createdByName: string
+    34→  createdAt: string
+    35→  committedAt?: string | null
+    36→  committedByName?: string | null
+    37→  totalItems: number
+    38→  countedItems: number
+    39→  diffItems: number
+    40→  diffValue: number
+    41→}
+    42→
+    43→interface CountItem {
+    44→  id: string
+    45→  productId: string
+    46→  name: string
+    47→  altName?: string | null
+    48→  unit: string
+    49→  category: string
+    50→  brand?: string | null
+    51→  image?: string | null
+    52→  buyPrice: number
+    53→  currentStock: number
+    54→  systemStock: number
+    55→  countedQty: number | null
+    56→  countedAt?: string | null
+    57→  countedByName?: string | null
+    58→  note?: string | null
+    59→  barcodes: string[]
+    60→}
+    61→
+    62→interface DetailData {
+    63→  session: Omit<SessionRow, 'totalItems' | 'countedItems' | 'diffItems' | 'diffValue'>
+    64→  items: CountItem[]
+    65→  stats: {
+    66→    totalItems: number
+    67→    countedItems: number
+    68→    diffItems: number
+    69→    diffValue: number
+    70→    shortageValue: number
+    71→    surplusValue: number
+    72→  }
+    73→}
+    74→
+    75→const STATUS_META: Record<string, { label: string; color: string }> = {
+    76→  IN_PROGRESS: { label: 'در جریان', color: '#B07D2B' },
+    77→  COMMITTED: { label: 'بسته‌شده', color: '#3E7C59' },
+    78→  CANCELLED: { label: 'لغوشده', color: '#8A8A8A' },
+    79→}
+    80→
+    81→type FilterKey = 'all' | 'uncounted' | 'diff' | 'counted'
+    82→const FILTERS: { key: FilterKey; label: string }[] = [
+    83→  { key: 'all', label: 'همه اقلام' },
+    84→  { key: 'uncounted', label: 'بدون شمارش' },
+    85→  { key: 'diff', label: 'مغایرت‌دار' },
+    86→  { key: 'counted', label: 'شمرده‌شده' },
+    87→]
+    88→
+    89→export function StockCount() {
+    90→  const { toast } = useToast()
+    91→  const user = useApp((s) => s.user)
+    92→  const canCount = !!user && (user.isManager || user.roleKeys.includes('inventory'))
+    93→
+    94→  const [sessions, setSessions] = React.useState<SessionRow[] | null>(null)
+    95→  const [loading, setLoading] = React.useState(true)
+    96→  const [startOpen, setStartOpen] = React.useState(false)
+    97→  const [detailId, setDetailId] = React.useState<string | null>(null)
+    98→
+    99→  const load = React.useCallback(async () => {
+   100→    setLoading(true)
+   101→    try {
+   102→      const d = await api<{ sessions: SessionRow[] }>('/api/stock-counts')
+   103→      setSessions(d.sessions)
+   104→    } catch (e) {
+   105→      toast({ title: 'خطا در دریافت جاردها', description: (e as Error).message, variant: 'destructive' })
+   106→    } finally {
+   107→      setLoading(false)
+   108→    }
+   109→  }, [toast])
+   110→
+   111→  React.useEffect(() => {
+   112→    if (canCount) load()
+   113→    else setLoading(false)
+   114→  }, [canCount, load])
+   115→
+   116→  if (!canCount) {
+   117→    return (
+   118→      <EmptyState
+   119→        icon={<ClipboardList className="h-10 w-10" />}
+   120→        title="جرد انبار"
+   121→        description="این بخش برای تیم انبار و مدیریت فعال است."
+   122→      />
+   123→    )
+   124→  }
+   125→
+   126→  const open = sessions?.filter((s) => s.status === 'IN_PROGRESS') ?? []
+   127→  const lastCommitted = sessions?.find((s) => s.status === 'COMMITTED')
+   128→  const totalDiffs = sessions?.reduce((n, s) => n + (s.status === 'COMMITTED' ? s.diffItems : 0), 0) ?? 0
+   129→
+   130→  return (
+   131→    <div>
+   132→      <SectionHeader
+   133→        title="جرد انبار"
+   134→        subtitle="شمارش واقعی موجودی، مقایسه با سیستم و اصلاح اختلاف‌ها — همه‌چیز با ثبت زمان و شمارش‌گر"
+   135→        icon={<ClipboardList className="h-6 w-6" />}
+   136→        actions={
+   137→          <Button
+   138→            onClick={() => setStartOpen(true)}
+   139→            disabled={open.length > 0}
+   140→            className="gap-2 gold-underline"
+   141→          >
+   142→            <Play className="h-4 w-4" />
+   143→            شروع جرد جدید
+   144→          </Button>
+   145→        }
+   146→      />
+   147→
+   148→      {/* stats strip */}
+   149→      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6 stagger-item">
+   150→        <StatCard title="جلسه باز" value={<AnimatedCount value={open.length} />} hint={open[0]?.code ?? 'جرد فعالی در جریان نیست'} icon={<ClipboardList className="h-5 w-5" />} color="#B07D2B" />
+   151→        <StatCard title="اقلام جلسه باز" value={open[0] ? <AnimatedCount value={open[0].totalItems} /> : '—'} hint={open[0] ? `${toFaDigits(open[0].countedItems)} شمرده شده` : 'یک جلسه شروع کنید'} icon={<PackageCheck className="h-5 w-5" />} color="#3E7C59" />
+   152→        <StatCard title="مغایرت آخرین جرد" value={lastCommitted ? <AnimatedCount value={lastCommitted.diffItems} /> : '—'} hint={lastCommitted ? `اثر ارزشی ${moneyCompact(lastCommitted.diffValue)} تومان` : 'هنوز جردی بسته نشده'} icon={<AlertTriangle className="h-5 w-5" />} color="#B33A3A" />
+   153→        <StatCard title="جلسات بسته‌شده" value={<AnimatedCount value={sessions?.filter((s) => s.status === 'COMMITTED').length ?? 0} />} hint={`${toFaDigits(totalDiffs)} قلم اصلاح‌شده تاکنون`} icon={<History className="h-5 w-5" />} color="#5E8C61" />
+   154→      </div>
+   155→
+   156→      {loading ? (
+   157→        <LoadingBlock rows={4} />
+   158→      ) : !sessions?.length ? (
+   159→        <EmptyState
+   160→          icon={<ClipboardList className="h-10 w-10" />}
+   161→          title="هنوز جلسه جردی ثبت نشده"
+   162→          description="جرد دوره‌ای انبار تضمین می‌کند موجودی سیستم با قفسه‌ها یکی باشد. با «شروع جرد جدید» همه اقلام با موجودی لحظه‌ای اسنپ‌شات می‌شوند."
+   163→        />
+   164→      ) : (
+   165→        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
+   166→          {sessions.map((s, idx) => {
+   167→            const meta = STATUS_META[s.status] ?? STATUS_META.IN_PROGRESS
+   168→            const pct = s.totalItems ? Math.round((s.countedItems / s.totalItems) * 100) : 0
+   169→            const openCount = s.status === 'IN_PROGRESS'
+   170→            return (
+   171→              <button
+   172→                key={s.id}
+   173→                onClick={() => setDetailId(s.id)}
+   174→                style={{ animationDelay: `${Math.min(idx * 70, 420)}ms` }}
+   175→                className={cn(
+   176→                  'stagger-item group relative text-right rounded-2xl border bg-card p-4 sm:p-5 card-hover transition-all outline-none overflow-hidden focus-visible:ring-2 focus-visible:ring-ring/50',
+   177→                  openCount ? 'border-[#C9A227]/40' : 'border-border'
+   178→                )}
+   179→              >
+   180→                {/* status hairline */}
+   181→                <span
+   182→                  aria-hidden
+   183→                  className={cn(
+   184→                    'absolute inset-x-0 top-0 h-[3px]',
+   185→                    openCount && 'bg-gradient-to-l from-[#C9A227] via-[#C9A227]/50 to-transparent',
+   186→                    s.status === 'COMMITTED' && 'bg-gradient-to-l from-[#3E7C59] via-[#3E7C59]/40 to-transparent',
+   187→                    s.status === 'CANCELLED' && 'bg-gradient-to-l from-muted-foreground/40 to-transparent'
+   188→                  )}
+   189→                />
+   190→                <div className="flex items-start justify-between gap-2 mb-2">
+   191→                  <div className="min-w-0">
+   192→                    <div className="font-bold num text-sm">{s.code}</div>
+   193→                    <div className="text-xs text-muted-foreground mt-0.5">
+   194→                      {s.scope === 'CATEGORY' ? `دسته «${s.category}»` : 'همه محصولات'} — {toFaDigits(s.totalItems)} قلم
+   195→                    </div>
+   196→                  </div>
+   197→                  <StatusBadge label={meta.label} color={meta.color} />
+   198→                </div>
+   199→
+   200→                {openCount && (
+   201→                  <div className="mb-3">
+   202→                    <div className="flex justify-between text-[11px] text-muted-foreground mb-1">
+   203→                      <span>پیشرفت شمارش</span>
+   204→                      <span className="num font-bold text-foreground">{toFaDigits(pct)}٪</span>
+   205→                    </div>
+   206→                    <Progress value={pct} className="h-1.5" />
+   207→                  </div>
+   208→                )}
+   209→
+   210→                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+   211→                  <span className="inline-flex items-center gap-1">
+   212→                    <span className="h-1.5 w-1.5 rounded-full bg-[#3E7C59]" aria-hidden />
+   213→                    جاردها: <b className="text-foreground num">{s.createdByName}</b>
+   214→                  </span>
+   215→                  <span>{timeAgo(s.createdAt)}</span>
+   216→                  {openCount && (
+   217→                    <span className="text-[#B07D2B] font-bold">
+   218→                      {toFaDigits(s.diffItems)} مغایرت تاکنون
+   219→                    </span>
+   220→                  )}
+   221→                  {s.status === 'COMMITTED' && s.committedAt && (
+   222→                    <span className="text-[#3E7C59]">بسته: {formatJalaliDateTime(s.committedAt)}</span>
+   223→                  )}
+   224→                </div>
+   225→              </button>
+   226→            )
+   227→          })}
+   228→        </div>
+   229→      )}
+   230→
+   231→      {startOpen && (
+   232→        <StartDialog
+   233→          open={startOpen}
+   234→          onOpenChange={setStartOpen}
+   235→          onStarted={async (id) => {
+   236→            setStartOpen(false)
+   237→            await load()
+   238→            setDetailId(id)
+   239→            toast({ title: 'جلسه جرد آغاز شد', description: 'اقلام با موجودی لحظه‌ای ثبت شدند — اسکنر بارکد آماده است' })
+   240→          }}
+   241→        />
+   242→      )}
+   243→
+   244→      {detailId && (
+   245→        <DetailDialog
+   246→          id={detailId}
+   247→          onClose={async () => {
+   248→            setDetailId(null)
+   249→            await load()
+   250→          }}
+   251→        />
+   252→      )}
+   253→    </div>
+   254→  )
+   255→}
+   256→
+   257→// ================= Start dialog =================
+   258→function StartDialog({
+   259→  open, onOpenChange, onStarted,
+   260→}: {
+   261→  open: boolean
+   262→  onOpenChange: (v: boolean) => void
+   263→  onStarted: (id: string) => void
+   264→}) {
+   265→  const { toast } = useToast()
+   266→  const [scope, setScope] = React.useState<'ALL' | 'CATEGORY'>('ALL')
+   267→  const [category, setCategory] = React.useState<string>('')
+   268→  const [note, setNote] = React.useState('')
+   269→  const [categories, setCategories] = React.useState<string[]>([])
+   270→  const [busy, setBusy] = React.useState(false)
+   271→
+   272→  React.useEffect(() => {
+   273→    if (!open) return
+   274→    api<{ categories: string[] }>('/api/products?limit=1')
+   275→      .then((d) => setCategories(d.categories ?? []))
+   276→      .catch(() => setCategories([]))
+   277→  }, [open])
+   278→
+   279→  const start = async () => {
+   280→    setBusy(true)
+   281→    try {
+   282→      const res = await api<{ id: string; code: string; totalItems: number }>('/api/stock-counts', {
+   283→        method: 'POST',
+   284→        body: { scope, category: scope === 'CATEGORY' ? category : undefined, note },
+   285→      })
+   286→      onStarted(res.id)
+   287→    } catch (e) {
+   288→      toast({ title: 'خطا در شروع جرد', description: (e as Error).message, variant: 'destructive' })
+   289→    } finally {
+   290→      setBusy(false)
+   291→    }
+   292→  }
+   293→
+   294→  return (
+   295→    <Dialog open={open} onOpenChange={onOpenChange}>
+   296→      <DialogContent className="sm:max-w-md">
+   297→        <DialogHeader>
+   298→          <DialogTitle className="flex items-center gap-2">
+   299→            <Play className="h-4 w-4 text-[#C9A227]" />
+   300→            شروع جلسه جرد
+   301→          </DialogTitle>
+   302→          <DialogDescription>
+   303→            موجودی لحظه‌ای همه اقلام محدوده انتخابی به‌عنوان مبنای مقایسه ثبت می‌شود.
+   304→          </DialogDescription>
+   305→        </DialogHeader>
+   306→
+   307→        <div className="space-y-4">
+   308→          <div>
+   309→            <label className="text-xs font-bold text-muted-foreground mb-1.5 block">محدوده جرد</label>
+   310→            <ChipSelect
+   311→              options={[
+   312→                { key: 'ALL' as const, label: 'همه محصولات' },
+   313→                { key: 'CATEGORY' as const, label: 'یک دسته خاص' },
+   314→              ]}
+   315→              value={scope}
+   316→              onChange={(v) => setScope(v)}
+   317→            />
+   318→          </div>
+   319→
+   320→          {scope === 'CATEGORY' && (
+   321→            <div>
+   322→              <label className="text-xs font-bold text-muted-foreground mb-1.5 block">دسته</label>
+   323→              <select
+   324→                value={category}
+   325→                onChange={(e) => setCategory(e.target.value)}
+   326→                className="w-full h-10 rounded-xl border border-input bg-card px-3 text-sm"
+   327→              >
+   328→                <option value="">انتخاب دسته…</option>
+   329→                {categories.map((c) => (
+   330→                  <option key={c} value={c}>{c}</option>
+   331→                ))}
+   332→              </select>
+   333→            </div>
+   334→          )}
+   335→
+   336→          <div>
+   337→            <label className="text-xs font-bold text-muted-foreground mb-1.5 block">توضیح (اختیاری)</label>
+   338→            <Textarea
+   339→              value={note}
+   340→              onChange={(e) => setNote(e.target.value)}
+   341→              rows={2}
+   342→              placeholder="مثلاً: جرد پایان فصل تابستان — هماهنگی با آقای محمودی"
+   343→            />
+   344→          </div>
+   345→
+   346→          <OrnateDivider />
+   347→
+   348→          <Button onClick={start} disabled={busy || (scope === 'CATEGORY' && !category)} className="w-full gap-2">
+   349→            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+   350→            شروع جرد
+   351→          </Button>
+   352→        </div>
+   353→      </DialogContent>
+   354→    </Dialog>
+   355→  )
+   356→}
+   357→
+   358→// ================= Detail dialog (the counting workspace) =================
+   359→function DetailDialog({ id, onClose }: { id: string; onClose: () => void }) {
+   360→  const { toast } = useToast()
+   361→  const user = useApp((s) => s.user)
+   362→  const setSection = useApp((s) => s.setSection)
+   363→  const [data, setData] = React.useState<DetailData | null>(null)
+   364→  const [loading, setLoading] = React.useState(true)
+   365→  const [filter, setFilter] = React.useState<FilterKey>('all')
+   366→  const [search, setSearch] = React.useState('')
+   367→  const [edits, setEdits] = React.useState<Record<string, number>>({}) // productId -> staged qty
+   368→  const [savingRows, setSavingRows] = React.useState<Set<string>>(new Set())
+   369→  const [scanFlash, setScanFlash] = React.useState<string | null>(null)
+   370→  const [commitOpen, setCommitOpen] = React.useState(false)
+   371→  const [commitBusy, setCommitBusy] = React.useState(false)
+   372→  const [wedgeBuf, setWedgeBuf] = React.useState('') // keyboard-wedge visual state
+   373→  const wedgeRef = React.useRef({ buf: '', timer: null as ReturnType<typeof setTimeout> | null })
+   374→  const rowRefs = React.useRef<Record<string, HTMLDivElement | null>>({})
+   375→
+   376→  const load = React.useCallback(async () => {
+   377→    try {
+   378→      const d = await api<DetailData>(`/api/stock-counts/${id}`)
+   379→      setData(d)
+   380→      setEdits({})
+   381→    } catch (e) {
+   382→      toast({ title: 'خطا در دریافت جلسه جرد', description: (e as Error).message, variant: 'destructive' })
+   383→    } finally {
+   384→      setLoading(false)
+   385→    }
+   386→  }, [id, toast])
+   387→
+   388→  React.useEffect(() => {
+   389→    load()
+   390→  }, [load])
+   391→
+   392→  const isInProgress = data?.session.status === 'IN_PROGRESS'
+   393→
+   394→  // ---------- stats derived live from items (survives optimistic updates) ----------
+   395→  const stats = React.useMemo(() => {
+   396→    const items = data?.items ?? []
+   397→    const counted = items.filter((i) => i.countedQty !== null)
+   398→    const diffs = counted.filter((i) => i.countedQty !== i.systemStock)
+   399→    let shortageValue = 0
+   400→    let surplusValue = 0
+   401→    for (const i of diffs) {
+   402→      const v = (i.countedQty! - i.systemStock) * i.buyPrice
+   403→      if (v < 0) shortageValue += -v
+   404→      else surplusValue += v
+   405→    }
+   406→    return {
+   407→      totalItems: items.length,
+   408→      countedItems: counted.length,
+   409→      diffItems: diffs.length,
+   410→      diffValue: Math.round(surplusValue - shortageValue),
+   411→      shortageValue: Math.round(shortageValue),
+   412→      surplusValue: Math.round(surplusValue),
+   413→    }
+   414→  }, [data?.items])
+   415→
+   416→  // ---------- save one row ----------
+   417→  const saveRow = React.useCallback(
+   418→    async (item: CountItem, qty: number) => {
+   419→      if (!isInProgress) return
+   420→      setSavingRows((s) => new Set(s).add(item.productId))
+   421→      try {
+   422→        await api(`/api/stock-counts/${id}`, {
+   423→          method: 'POST',
+   424→          body: { action: 'count', productId: item.productId, countedQty: qty },
+   425→        })
+   426→        setEdits((e) => {
+   427→          const rest = { ...e }
+   428→          delete rest[item.productId]
+   429→          return rest
+   430→        })
+   431→        setData((d) => {
+   432→          if (!d) return d
+   433→          return {
+   434→            ...d,
+   435→            items: d.items.map((it) =>
+   436→              it.productId === item.productId
+   437→                ? { ...it, countedQty: qty, countedAt: new Date().toISOString(), countedByName: user?.name ?? '' }
+   438→                : it
+   439→            ),
+   440→          }
+   441→        })
+   442→      } catch (e) {
+   443→        toast({ title: 'خطا در ثبت شمارش', description: (e as Error).message, variant: 'destructive' })
+   444→      } finally {
+   445→        setSavingRows((s) => {
+   446→          const n = new Set(s)
+   447→          n.delete(item.productId)
+   448→          return n
+   449→        })
+   450→      }
+   451→    },
+   452→    [id, isInProgress, toast, user?.name]
+   453→  )
+   454→
+   455→  // ---------- barcode scan handler ----------
+   456→  const handleScan = React.useCallback(
+   457→    (code: string) => {
+   458→      if (!data) return
+   459→      const item = data.items.find((it) => it.barcodes.includes(code))
+   460→      if (!item) {
+   461→        toast({ title: 'بارکد شناخته نشد', description: `کد ${toFaDigits(code)} در محدوده این جلسه جرد نیست`, variant: 'destructive' })
+   462→        return
+   463→      }
+   464→      setFilter('all')
+   465→      setSearch('')
+   466→      // scroll + flash + focus its qty input
+   467→      requestAnimationFrame(() => {
+   468→        rowRefs.current[item.productId]?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+   469→      })
+   470→      setScanFlash(item.productId)
+   471→      setTimeout(() => setScanFlash(null), 1800)
+   472→      const input = rowRefs.current[item.productId]?.querySelector('input[data-qty]') as HTMLInputElement | null
+   473→      input?.focus()
+   474→      input?.select()
+   475→    },
+   476→    [data, toast]
+   477→  )
+   478→
+   479→  // ---------- global keyboard-wedge capture (digits typed while focus is outside inputs) ----------
+   480→  React.useEffect(() => {
+   481→    if (!isInProgress) return
+   482→    const onKey = (e: KeyboardEvent) => {
+   483→      const t = e.target as HTMLElement | null
+   484→      const inField = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)
+   485→      if (inField) return
+   486→      if (/^\d$/.test(e.key)) {
+   487→        const w = wedgeRef.current
+   488→        w.buf = (w.buf + e.key).slice(-32)
+   489→        setWedgeBuf(w.buf)
+   490→        if (w.timer) clearTimeout(w.timer)
+   491→        w.timer = setTimeout(() => {
+   492→          w.buf = ''
+   493→          setWedgeBuf('')
+   494→        }, 4000)
+   495→      } else if (e.key === 'Enter' && wedgeRef.current.buf.length >= 4) {
+   496→        const code = wedgeRef.current.buf
+   497→        wedgeRef.current.buf = ''
+   498→        setWedgeBuf('')
+   499→        handleScan(code)
+   500→      }
+   501→    }
+   502→    window.addEventListener('keydown', onKey)
+   503→    return () => window.removeEventListener('keydown', onKey)
+   504→  }, [isInProgress, handleScan])
+   505→
+   506→  // ---------- commit ----------
+   507→  const commit = async () => {
+   508→    setCommitBusy(true)
+   509→    try {
+   510→      const res = await api<{ adjusted: number; counted: number; shortage: number; surplus: number; netValue: number }>(
+   511→        `/api/stock-counts/${id}`,
+   512→        { method: 'POST', body: { action: 'commit' } }
+   513→      )
+   514→      toast({
+   515→        title: 'جرد بسته و موجودی اصلاح شد',
+   516→        description: `${toFaDigits(res.counted)} قلم شمرده — ${toFaDigits(res.shortage)} کسری / ${toFaDigits(res.surplus)} مازاد اصلاح شد (اثر ${moneyCompact(res.netValue)} تومان)`,
+   517→      })
+   518→      setCommitOpen(false)
+   519→      await load()
+   520→    } catch (e) {
+   521→      toast({ title: 'خطا در بستن جرد', description: (e as Error).message, variant: 'destructive' })
+   522→    } finally {
+   523→      setCommitBusy(false)
+   524→    }
+   525→  }
+   526→
+   527→  const cancel = async () => {
+   528→    try {
+   529→      await api(`/api/stock-counts/${id}`, { method: 'POST', body: { action: 'cancel' } })
+   530→      toast({ title: 'جلسه جرد لغو شد' })
+   531→      onClose()
+   532→    } catch (e) {
+   533→      toast({ title: 'خطا در لغو', description: (e as Error).message, variant: 'destructive' })
+   534→    }
+   535→  }
+   536→
+   537→  // ---------- reorder replacements for shortage items (count → order loop) ----------
+   538→  const shortageItems = (data?.items ?? []).filter(
+   539→    (it) => it.countedQty !== null && it.countedQty < it.systemStock
+   540→  )
+   541→  const reorderShortages = () => {
+   542→    if (!shortageItems.length) return
+   543→    const rows = shortageItems.map((it) => ({
+   544→      productId: it.productId,
+   545→      qty: Math.max(1, it.systemStock - it.countedQty!), // replace exactly what went missing
+   546→    }))
+   547→    try {
+   548→      window.localStorage.setItem('hz_prefill_items', JSON.stringify(rows))
+   549→    } catch {
+   550→      /* ignore */
+   551→    }
+   552→    toast({
+   553→      title: 'آماده سفارش جایگزین',
+   554→      description: `${toFaDigits(rows.length)} قلم کسری به پیش‌نویس سفارش اضافه شد — تأمین‌کننده را انتخاب کنید`,
+   555→    })
+   556→    onClose()
+   557→    setSection('orders')
+   558→  }
+   559→
+   560→  if (loading || !data) {
+   561→    return (
+   562→      <Dialog open onOpenChange={(v) => !v && onClose()}>
+   563→        <DialogContent className="sm:max-w-2xl">
+   564→          <DialogHeader>
+   565→            <DialogTitle>جلسه جرد</DialogTitle>
+   566→            <DialogDescription>در حال دریافت اقلام…</DialogDescription>
+   567→          </DialogHeader>
+   568→          <LoadingBlock rows={5} />
+   569→        </DialogContent>
+   570→      </Dialog>
+   571→    )
+   572→  }
+   573→
+   574→  const s = data.session
+   575→  const meta = STATUS_META[s.status] ?? STATUS_META.IN_PROGRESS
+   576→  const pct = stats.totalItems ? Math.round((stats.countedItems / stats.totalItems) * 100) : 0
+   577→
+   578→  const filtered = data.items.filter((it) => {
+   579→    if (filter === 'uncounted' && it.countedQty !== null) return false
+   580→    if (filter === 'counted' && it.countedQty === null) return false
+   581→    if (filter === 'diff' && (it.countedQty === null || it.countedQty === it.systemStock)) return false
+   582→    if (search) {
+   583→      const q = search.trim()
+   584→      const hay = `${it.name} ${it.altName ?? ''} ${it.brand ?? ''} ${it.barcodes.join(' ')}`
+   585→      if (!hay.includes(q)) return false
+   586→    }
+   587→    return true
+   588→  })
+   589→
+   590→  const diffOf = (it: CountItem) => {
+   591→    const qty = edits[it.productId] ?? it.countedQty
+   592→    if (qty === null || qty === undefined) return null
+   593→    return qty - it.systemStock
+   594→  }
+   595→
+   596→  const openDiffCount = data.items.filter((it) => it.countedQty !== null && it.countedQty !== it.systemStock).length
+   597→
+   598→  return (
+   599→    <Dialog open onOpenChange={(v) => !v && onClose()}>
+   600→      <DialogContent className="sm:max-w-3xl max-h-[92vh] flex flex-col">
+   601→        <DialogHeader className="pb-1">
+   602→          <DialogTitle className="flex flex-wrap items-center gap-2">
+   603→            <ClipboardList className="h-4 w-4 text-[#C9A227]" />
+   604→            <span className="num">{s.code}</span>
+   605→            <StatusBadge label={meta.label} color={meta.color} />
+   606→            {s.scope === 'CATEGORY' && (
+   607→              <span className="text-xs font-normal text-muted-foreground">دسته «{s.category}»</span>
+   608→            )}
+   609→          </DialogTitle>
+   610→          <DialogDescription>
+   611→            {isInProgress
+   612→              ? 'تعداد واقعی را وارد کنید — با Enter یا خروج از فیلد ثبت می‌شود. اسکنر بارکد فعال است.'
+   613→              : `باز شده توسط ${s.createdByName} در ${formatJalaliDateTime(s.createdAt)}${s.committedAt ? ` — بسته توسط ${s.committedByName} در ${formatJalaliDateTime(s.committedAt)}` : ''}`}
+   614→          </DialogDescription>
+   615→        </DialogHeader>
+   616→        <OrnateDivider className="mb-2" />
+   617→
+   618→        {/* progress + stats */}
+   619→        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 mb-3">
+   620→          <div className="rounded-xl border border-border bg-card p-3">
+   621→            <div className="text-[11px] text-muted-foreground mb-1">پیشرفت شمارش</div>
+   622→            <div className="text-lg font-black num">{toFaDigits(pct)}٪</div>
+   623→            <Progress value={pct} className="h-1.5 mt-2" />
+   624→            <div className="text-[10px] text-muted-foreground mt-1 num">{toFaDigits(stats.countedItems)} از {toFaDigits(stats.totalItems)} قلم</div>
+   625→          </div>
+   626→          <div className="rounded-xl border border-border bg-card p-3">
+   627→            <div className="text-[11px] text-muted-foreground mb-1">مغایرت‌ها</div>
+   628→            <div className={cn('text-lg font-black num', openDiffCount > 0 ? 'text-[#B33A3A]' : 'text-[#3E7C59]')}>
+   629→              {toFaDigits(openDiffCount)}
+   630→            </div>
+   631→            <div className="text-[10px] text-muted-foreground mt-1">قلم اختلاف‌دار</div>
+   632→          </div>
+   633→          <div className="rounded-xl border border-border bg-card p-3">
+   634→            <div className="text-[11px] text-muted-foreground mb-1 inline-flex items-center gap-1"><TrendingDown className="h-3 w-3 text-[#B33A3A]" /> کسری</div>
+   635→            <div className="text-sm font-black num text-[#B33A3A]">{moneyCompact(stats.shortageValue)}</div>
+   636→            <div className="text-[10px] text-muted-foreground mt-1">تومان اثر کسری</div>
+   637→          </div>
+   638→          <div className="rounded-xl border border-border bg-card p-3">
+   639→            <div className="text-[11px] text-muted-foreground mb-1 inline-flex items-center gap-1"><TrendingUp className="h-3 w-3 text-[#3E7C59]" /> مازاد</div>
+   640→            <div className="text-sm font-black num text-[#3E7C59]">{moneyCompact(stats.surplusValue)}</div>
+   641→            <div className="text-[10px] text-muted-foreground mt-1">تومان اثر مازاد</div>
+   642→          </div>
+   643→        </div>
+   644→
+   645→        {isInProgress ? (
+   646→          <>
+   647→            {/* scanner bar */}
+   648→            <div className="flex items-center gap-2 mb-3">
+   649→              <BarcodeInput onScan={handleScan} autoFocus className="flex-1" placeholder="بارکد را اسکن کنید تا ردیفش پیدا شود…" />
+   650→              <div
+   651→                className={cn(
+   652→                  'hidden sm:flex items-center gap-1.5 rounded-full border px-3 py-2 text-[11px] font-bold transition-colors',
+   653→                  wedgeBuf ? 'border-[#3E7C59] bg-[#3E7C59]/10 text-[#3E7C59]' : 'border-border text-muted-foreground'
+   654→                )}
+   655→                aria-live="polite"
+   656→              >
+   657→                <ScanLine className={cn('h-3.5 w-3.5', wedgeBuf && 'animate-pulse')} />
+   658→                {wedgeBuf ? 'دریافت بارکد…' : 'اسکنر آماده'}
+   659→              </div>
+   660→            </div>
+   661→
+   662→            {/* filters */}
+   663→            <div className="flex flex-wrap items-center gap-2 mb-3">
+   664→              <ChipSelect options={FILTERS} value={filter} onChange={(v) => setFilter(v)} />
+   665→              <div className="relative flex-1 min-w-36">
+   666→                <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+   667→                <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="جستجوی نام/بارکد…" className="h-9 pr-9 text-xs" />
+   668→              </div>
+   669→            </div>
+   670→          </>
+   671→        ) : (
+   672→          <div className="flex flex-wrap items-center gap-2 mb-3">
+   673→            <ChipSelect options={FILTERS} value={filter} onChange={(v) => setFilter(v)} />
+   674→            <div className="relative flex-1 min-w-36">
+   675→              <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+   676→              <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="جستجو…" className="h-9 pr-9 text-xs" />
+   677→            </div>
+   678→            <a
+   679→              href={`/api/stock-counts/${id}/export`}
+   680→              className="inline-flex items-center gap-1.5 rounded-xl border border-[#C9A227]/40 bg-[#C9A227]/10 px-3 py-2 text-xs font-bold text-[#8a6f1c] hover:bg-[#C9A227]/20 transition-colors dark:text-[#e3c765]"
+   681→            >
+   682→              <FileSpreadsheet className="h-4 w-4" />
+   683→              خروجی اکسل نتیجه
+   684→            </a>
+   685→          </div>
+   686→        )}
+   687→
+   688→        {/* items */}
+   689→        <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1 space-y-2 nice-scroll" role="list">
+   690→          {filtered.length === 0 ? (
+   691→            <EmptyState icon={<ListFilter className="h-8 w-8" />} title="ردیفی با این فیلتر نیست" description="فیلتر یا جستجو را تغییر دهید." />
+   692→          ) : (
+   693→            filtered.map((it) => {
+   694→              const diff = diffOf(it)
+   695→              const counted = it.countedQty !== null
+   696→              return (
+   697→                <div
+   698→                  key={it.productId}
+   699→                  role="listitem"
+   700→                  ref={(el) => { rowRefs.current[it.productId] = el }}
+   701→                  className={cn(
+   702→                    'rounded-xl border p-3 transition-all duration-500',
+   703→                    scanFlash === it.productId
+   704→                      ? 'border-[#3E7C59] bg-[#3E7C59]/10 ring-2 ring-[#3E7C59]/30'
+   705→                      : 'border-border bg-card',
+   706→                    !isInProgress && diff !== null && diff !== 0 && 'border-[#B33A3A]/30'
+   707→                  )}
+   708→                >
+   709→                  <div className="flex flex-wrap items-center gap-3">
+   710→                    {/* product */}
+   711→                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+   712→                      <div className="h-9 w-9 shrink-0 rounded-lg bg-gradient-to-br from-[#3E7C59]/15 to-[#C9A227]/15 grid place-items-center text-xs font-black text-[#3E7C59] overflow-hidden">
+   713→                        {it.image ? (
+   714→                          <img src={it.image} alt="" className="h-full w-full object-cover" />
+   715→                        ) : (
+   716→                          it.name.slice(0, 2)
+   717→                        )}
+   718→                      </div>
+   719→                      <div className="min-w-0">
+   720→                        <div className="text-sm font-bold truncate">{it.name}</div>
+   721→                        <div className="text-[10px] text-muted-foreground num truncate">
+   722→                          {it.barcodes[0] ? toFaDigits(it.barcodes[0]) : '—'} — موجودی سیستم: {toFaDigits(it.systemStock)} {it.unit}
+   723→                        </div>
+   724→                      </div>
+   725→                    </div>
+   726→
+   727→                    {/* qty input */}
+   728→                    {isInProgress ? (
+   729→                      <div className="flex items-center gap-1.5">
+   730→                        <Button
+   731→                          variant="outline" size="icon" className="h-9 w-9"
+   732→                          disabled={savingRows.has(it.productId)}
+   733→                          onClick={() => {
+   734→                            const cur = edits[it.productId] ?? it.countedQty ?? 0
+   735→                            setEdits((e) => ({ ...e, [it.productId]: Math.max(0, cur - 1) }))
+   736→                          }}
+   737→                          aria-label="کاهش"
+   738→                        >
+   739→                          <Minus className="h-3.5 w-3.5" />
+   740→                        </Button>
+   741→                        <Input
+   742→                          data-qty
+   743→                          inputMode="numeric"
+   744→                          value={edits[it.productId] ?? it.countedQty ?? ''}
+   745→                          onChange={(e) => {
+   746→                            const v = e.target.value.replace(/[^\d۰-۹]/g, '').replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+   747→                            setEdits((e) => ({ ...e, [it.productId]: v === '' ? (undefined as unknown as number) : Number(v) }))
+   748→                          }}
+   749→                          onBlur={() => {
+   750→                            const raw = edits[it.productId]
+   751→                            if (raw !== undefined && !Number.isNaN(raw)) saveRow(it, raw)
+   752→                          }}
+   753→                          onKeyDown={(e) => {
+   754→                            if (e.key === 'Enter') {
+   755→                              const raw = edits[it.productId]
+   756→                              if (raw !== undefined && !Number.isNaN(raw)) saveRow(it, raw)
+   757→                            }
+   758→                          }}
+   759→                          placeholder="تعداد"
+   760→                          className="w-20 h-9 text-center num font-bold"
+   761→                          aria-label={`تعداد شمرده‌شده ${it.name}`}
+   762→                        />
+   763→                        <Button
+   764→                          variant="outline" size="icon" className="h-9 w-9"
+   765→                          disabled={savingRows.has(it.productId)}
+   766→                          onClick={() => {
+   767→                            const cur = edits[it.productId] ?? it.countedQty ?? 0
+   768→                            setEdits((e) => ({ ...e, [it.productId]: cur + 1 }))
+   769→                          }}
+   770→                          aria-label="افزایش"
+   771→                        >
+   772→                          <Plus className="h-3.5 w-3.5" />
+   773→                        </Button>
+   774→                        {savingRows.has(it.productId) && <Loader2 className="h-4 w-4 animate-spin text-[#3E7C59]" />}
+   775→                      </div>
+   776→                    ) : (
+   777→                      <div className="text-left">
+   778→                        <div className="text-sm font-black num">{it.countedQty !== null ? toFaDigits(it.countedQty) : '—'}</div>
+   779→                        <div className="text-[10px] text-muted-foreground">{it.countedByName ?? ''}</div>
+   780→                      </div>
+   781→                    )}
+   782→
+   783→                    {/* diff badge */}
+   784→                    <div className="w-20 text-center">
+   785→                      {diff !== null && diff !== undefined && (
+   786→                        <span
+   787→                          className={cn(
+   788→                            'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-black num',
+   789→                            diff === 0 && 'bg-[#3E7C59]/10 text-[#3E7C59]',
+   790→                            diff > 0 && 'bg-[#C9A227]/15 text-[#8a6f1c] dark:text-[#e3c765]',
+   791→                            diff < 0 && 'bg-[#B33A3A]/10 text-[#B33A3A]'
+   792→                          )}
+   793→                          title={diff !== 0 ? `اثر ارزشی: ${money(diff * it.buyPrice)} تومان` : 'بدون مغایرت'}
+   794→                        >
+   795→                          {diff === 0 ? (
+   796→                            <CheckCircle2 className="h-3 w-3" aria-hidden />
+   797→                          ) : diff > 0 ? (
+   798→                            <TrendingUp className="h-3 w-3" aria-hidden />
+   799→                          ) : (
+   800→                            <TrendingDown className="h-3 w-3" aria-hidden />
+   801→                          )}
+   802→                          {diff === 0 ? 'انطباق' : diff > 0 ? `+${toFaDigits(diff)}` : toFaDigits(diff)}
+   803→                        </span>
+   804→                      )}
+   805→                      {counted && it.countedAt && diff !== 0 && (
+   806→                        <div className="text-[9px] text-muted-foreground mt-0.5">{timeAgo(it.countedAt)}</div>
+   807→                      )}
+   808→                    </div>
+   809→                  </div>
+   810→                </div>
+   811→              )
+   812→            })
+   813→          )}
+   814→        </div>
+   815→
+   816→        {/* footer actions */}
+   817→        <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-border mt-1">
+   818→          <div className="flex items-center gap-2">
+   819→            {!isInProgress && shortageItems.length > 0 && (
+   820→              <Button
+   821→                variant="outline"
+   822→                onClick={reorderShortages}
+   823→                className="gap-1.5 border-[#3E7C59]/40 text-[#3E7C59] hover:bg-[#3E7C59]/10 text-xs"
+   824→              >
+   825→                <ShoppingCart className="h-4 w-4" />
+   826→                سفارش جایگزین برای {toFaDigits(shortageItems.length)} قلم کسری
+   827→              </Button>
+   828→            )}
+   829→            {isInProgress && (
+   830→              <>
+   831→                <a
+   832→                  href={`/api/stock-counts/${id}/export`}
+   833→                  className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:bg-accent transition-colors"
+   834→                >
+   835→                  <FileSpreadsheet className="h-4 w-4" />
+   836→                  برگه خالی (چاپ/اکسل)
+   837→                </a>
+   838→                <Button onClick={() => setCommitOpen(true)} className="gap-2" disabled={stats.countedItems === 0}>
+   839→                  <CheckCircle2 className="h-4 w-4" />
+   840→                  بستن جرد و اصلاح موجودی
+   841→                </Button>
+   842→                <ConfirmButton
+   843→                  onConfirm={cancel}
+   844→                  confirmText="تأیید لغو جلسه؟"
+   845→                  variant="ghost"
+   846→                  className="text-xs text-[#B33A3A] border border-[#B33A3A]/30"
+   847→                >
+   848→                  <Ban className="h-4 w-4" />
+   849→                  لغو جلسه
+   850→                </ConfirmButton>
+   851→              </>
+   852→            )}
+   853→          </div>
+   854→          <div className="text-[11px] text-muted-foreground">
+   855→            {isInProgress
+   856→              ? `${toFaDigits(stats.totalItems - stats.countedItems)} قلم مانده تا تکمیل شمارش`
+   857→              : `نتیجه نهایی — ${toFaDigits(stats.diffItems)} مغایرت با اثر ${moneyCompact(stats.diffValue)} تومان`}
+   858→          </div>
+   859→        </div>
+   860→
+   861→        {/* commit confirm */}
+   862→        <Dialog open={commitOpen} onOpenChange={setCommitOpen}>
+   863→          <DialogContent className="sm:max-w-md">
+   864→            <DialogHeader>
+   865→              <DialogTitle>بستن جرد و اصلاح موجودی</DialogTitle>
+   866→              <DialogDescription>
+   867→                موجودی سیستم برای همه ردیف‌های مغایرت‌دار به تعداد شمرده‌شده تغییر می‌کند و برای مدیریت و حسابداری اطلاع‌رسانی می‌شود.
+   868→              </DialogDescription>
+   869→            </DialogHeader>
+   870→            <div className="rounded-xl border border-[#C9A227]/30 bg-[#C9A227]/5 p-3 text-sm space-y-1.5">
+   871→              <div className="flex justify-between"><span className="text-muted-foreground">اقلام شمرده‌شده</span><b className="num">{toFaDigits(stats.countedItems)}</b></div>
+   872→              <div className="flex justify-between"><span className="text-muted-foreground">بدون شمارش (دست‌نخورده)</span><b className="num">{toFaDigits(stats.totalItems - stats.countedItems)}</b></div>
+   873→              <div className="flex justify-between text-[#B33A3A]"><span>کسری</span><b className="num">{toFaDigits(data.items.filter((i) => i.countedQty !== null && i.countedQty < i.systemStock).length)} قلم</b></div>
+   874→              <div className="flex justify-between text-[#3E7C59]"><span>مازاد</span><b className="num">{toFaDigits(data.items.filter((i) => i.countedQty !== null && i.countedQty > i.systemStock).length)} قلم</b></div>
+   875→              <OrnateDivider />
+   876→              <div className="flex justify-between font-black">
+   877→                <span>اثر ارزشی خالص</span>
+   878→                <span className="num">{money(stats.diffValue)} تومان</span>
+   879→              </div>
+   880→            </div>
+   881→            <Button onClick={commit} disabled={commitBusy} className="w-full gap-2">
+   882→              {commitBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+   883→              تأیید نهایی و اصلاح
+   884→            </Button>
+   885→          </DialogContent>
+   886→        </Dialog>
+   887→      </DialogContent>
+   888→    </Dialog>
+   889→  )
+   890→}
+   891→

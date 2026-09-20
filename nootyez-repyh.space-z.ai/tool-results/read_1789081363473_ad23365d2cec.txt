@@ -1,0 +1,635 @@
+     1→'use client'
+     2→import * as React from 'react'
+     3→import { toast } from 'sonner'
+     4→import { Search, Pencil, Plus, Globe, ImagePlus, Upload, Info, PackageSearch, FileSpreadsheet, RotateCcw } from 'lucide-react'
+     5→import { api, uploadFile } from '@/lib/api'
+     6→import { toFaDigits } from '@/lib/jalali'
+     7→import { hasRole, type PUser, type ProductT, type SupplierT } from '@/lib/types'
+     8→import {
+     9→  Card, SectionHeader, Badge, StockBadge, stockDot, Field, inputCls, PrimaryButton, GoldButton,
+    10→  GhostButton, EmptyState, Loading, Modal, Money, ProductImage, Spinner,
+    11→} from './kit'
+    12→
+    13→/* ---------- local types ---------- */
+    14→type ParseRow = {
+    15→  name: string
+    16→  barcode: string
+    17→  buyPrice: number
+    18→  sellPrice: number
+    19→  stock: number
+    20→  category: string
+    21→  duplicateOfId?: number
+    22→  status: 'new' | 'duplicate' | 'invalid'
+    23→}
+    24→type ParseResult = { rows: ParseRow[]; total: number; invalid: number; duplicates: number; news: number }
+    25→type SupplierOpt = { id: number; name: string }
+    26→type CompanyOpt = { id: number; name: string }
+    27→
+    28→type ProductForm = {
+    29→  name: string; nameFa: string; barcode: string
+    30→  buyPrice: string; sellPrice: string; sellPrice2: string
+    31→  stock: string; minStock: string
+    32→  category: string; unit: string
+    33→  supplierId: string; companyId: string
+    34→  active: boolean; imageUrl: string | null
+    35→}
+    36→
+    37→const emptyForm = (): ProductForm => ({
+    38→  name: '', nameFa: '', barcode: '',
+    39→  buyPrice: '0', sellPrice: '0', sellPrice2: '',
+    40→  stock: '0', minStock: '10',
+    41→  category: '', unit: 'عدد',
+    42→  supplierId: '', companyId: '',
+    43→  active: true, imageUrl: null,
+    44→})
+    45→
+    46→const MANAGE_HINT = 'اینجا مرکز اطلاعات کالاست: قیمت فروش، موجودی و بارکد همه کالاها رو ببین. افزودن یا ویرایش کالا با مدیران محصول است.'
+    47→
+    48→/** downscale an image file via canvas → JPEG dataUrl (max 320px, quality 0.8) */
+    49→async function fileToDataUrl(file: File): Promise<string> {
+    50→  const dataUrl = await new Promise<string>((resolve, reject) => {
+    51→    const r = new FileReader()
+    52→    r.onload = () => resolve(String(r.result))
+    53→    r.onerror = () => reject(new Error('read failed'))
+    54→    r.readAsDataURL(file)
+    55→  })
+    56→  const img = document.createElement('img')
+    57→  await new Promise<void>((resolve, reject) => {
+    58→    img.onload = () => resolve()
+    59→    img.onerror = () => reject(new Error('decode failed'))
+    60→    img.src = dataUrl
+    61→  })
+    62→  const max = 320
+    63→  const scale = Math.min(1, max / Math.max(img.width || 1, img.height || 1))
+    64→  const w = Math.max(1, Math.round(img.width * scale))
+    65→  const h = Math.max(1, Math.round(img.height * scale))
+    66→  const canvas = document.createElement('canvas')
+    67→  canvas.width = w
+    68→  canvas.height = h
+    69→  canvas.getContext('2d')?.drawImage(img, 0, 0, w, h)
+    70→  return canvas.toDataURL('image/jpeg', 0.8)
+    71→}
+    72→
+    73→/** image-search thumbnail with eslint escape */
+    74→function Thumb({ src, name, onClick }: { src: string; name: string; onClick: () => void }) {
+    75→  return (
+    76→    <button
+    77→      type="button"
+    78→      onClick={onClick}
+    79→      className="h-16 w-16 overflow-hidden rounded-lg border border-[#E4DCC8] bg-white p-0 transition hover:ring-2 hover:ring-[#93C572]"
+    80→      title="انتخاب این تصویر"
+    81→    >
+    82→      <img src={src} alt={name} className="h-full w-full object-cover" />
+    83→    </button>
+    84→  )
+    85→}
+    86→
+    87→function StatusChip({ status }: { status: ParseRow['status'] }) {
+    88→  if (status === 'new') return <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">جدید</Badge>
+    89→  if (status === 'duplicate') return <Badge className="border-amber-200 bg-amber-50 text-amber-700">تکراری</Badge>
+    90→  return <Badge className="border-rose-200 bg-rose-50 text-rose-700">نامعتبر</Badge>
+    91→}
+    92→
+    93→export default function ProductsSection({ user }: { user: PUser }) {
+    94→  const manage =
+    95→    hasRole(user, 'GENERAL_MANAGER') || hasRole(user, 'PRODUCT_MANAGER') ||
+    96→    hasRole(user, 'OPERATION_MANAGER') || hasRole(user, 'IT_ADMIN')
+    97→
+    98→  /* ---------- list state ---------- */
+    99→  const [products, setProducts] = React.useState<ProductT[]>([])
+   100→  const [categories, setCategories] = React.useState<string[]>([])
+   101→  const [loading, setLoading] = React.useState(true)
+   102→  const [qInput, setQInput] = React.useState('')
+   103→  const [q, setQ] = React.useState('')
+   104→  const [category, setCategory] = React.useState('')
+   105→  const [low, setLow] = React.useState(false)
+   106→
+   107→  React.useEffect(() => {
+   108→    const t = setTimeout(() => setQ(qInput.trim()), 400)
+   109→    return () => clearTimeout(t)
+   110→  }, [qInput])
+   111→
+   112→  const load = React.useCallback(async () => {
+   113→    setLoading(true)
+   114→    try {
+   115→      const params = new URLSearchParams({ limit: '500' })
+   116→      if (q) params.set('q', q)
+   117→      if (category) params.set('category', category)
+   118→      if (low) params.set('low', '1')
+   119→      const data = await api.get<{ products: ProductT[]; categories: string[] }>(`/api/products?${params.toString()}`)
+   120→      setProducts(data.products ?? [])
+   121→      setCategories(data.categories ?? [])
+   122→    } catch (e) {
+   123→      toast.error(e instanceof Error ? e.message : 'خطا در دریافت کالاها')
+   124→    } finally {
+   125→      setLoading(false)
+   126→    }
+   127→  }, [q, category, low])
+   128→
+   129→  React.useEffect(() => { void load() }, [load])
+   130→
+   131→  /* ---------- edit modal ---------- */
+   132→  const [editOpen, setEditOpen] = React.useState(false)
+   133→  const [editing, setEditing] = React.useState<ProductT | null>(null) // null = new
+   134→  const [form, setForm] = React.useState<ProductForm>(emptyForm())
+   135→  const [saving, setSaving] = React.useState(false)
+   136→  const [suppliers, setSuppliers] = React.useState<SupplierOpt[]>([])
+   137→  const [companies, setCompanies] = React.useState<CompanyOpt[]>([])
+   138→
+   139→  React.useEffect(() => {
+   140→    if (!manage) return
+   141→    void (async () => {
+   142→      try {
+   143→        const [s, c] = await Promise.all([
+   144→          api.get<{ suppliers: SupplierT[] }>('/api/suppliers'),
+   145→          api.get<{ companies: CompanyOpt[] }>('/api/companies'),
+   146→        ])
+   147→        setSuppliers((s.suppliers ?? []).map((x) => ({ id: x.id, name: x.name })))
+   148→        setCompanies(c.companies ?? [])
+   149→      } catch { /* selects stay empty */ }
+   150→    })()
+   151→  }, [manage])
+   152→
+   153→  const openEdit = (p: ProductT | null) => {
+   154→    setEditing(p)
+   155→    setForm(p ? {
+   156→      name: p.name, nameFa: p.nameFa ?? '', barcode: p.barcode ?? '',
+   157→      buyPrice: String(p.buyPrice ?? 0), sellPrice: String(p.sellPrice ?? 0),
+   158→      sellPrice2: p.sellPrice2 != null ? String(p.sellPrice2) : '',
+   159→      stock: String(p.stock ?? 0), minStock: String(p.minStock ?? 10),
+   160→      category: p.category ?? '', unit: p.unit ?? 'عدد',
+   161→      supplierId: p.supplierId ? String(p.supplierId) : '',
+   162→      companyId: p.companyId ? String(p.companyId) : '',
+   163→      active: p.active, imageUrl: p.imageUrl ?? null,
+   164→    } : emptyForm())
+   165→    setImgResults([])
+   166→    setEditOpen(true)
+   167→  }
+   168→
+   169→  const setF = (k: keyof ProductForm, v: string | boolean | null) => setForm((f) => ({ ...f, [k]: v }))
+   170→
+   171→  const saveProduct = async () => {
+   172→    if (!form.name.trim()) { toast.error('نام محصول الزامی است'); return }
+   173→    setSaving(true)
+   174→    try {
+   175→      const payload = {
+   176→        name: form.name.trim(),
+   177→        nameFa: form.nameFa.trim() || null,
+   178→        barcode: form.barcode.trim() || null,
+   179→        buyPrice: Number(form.buyPrice) || 0,
+   180→        sellPrice: Number(form.sellPrice) || 0,
+   181→        sellPrice2: form.sellPrice2 !== '' ? Number(form.sellPrice2) : null,
+   182→        stock: Number(form.stock) || 0,
+   183→        minStock: Number(form.minStock) || 0,
+   184→        category: form.category.trim() || null,
+   185→        unit: form.unit.trim() || 'عدد',
+   186→        supplierId: form.supplierId ? Number(form.supplierId) : null,
+   187→        companyId: form.companyId ? Number(form.companyId) : null,
+   188→        active: form.active,
+   189→        imageUrl: form.imageUrl,
+   190→        userId: user.id,
+   191→        userName: user.name,
+   192→      }
+   193→      if (editing?.id) {
+   194→        await api.patch('/api/products', { id: editing.id, ...payload })
+   195→        toast.success('محصول بروزرسانی شد')
+   196→      } else {
+   197→        await api.post('/api/products', payload)
+   198→        toast.success('محصول جدید ثبت شد')
+   199→      }
+   200→      setEditOpen(false)
+   201→      void load()
+   202→    } catch (e) {
+   203→      toast.error(e instanceof Error ? e.message : 'خطا در ذخیره محصول')
+   204→    } finally {
+   205→      setSaving(false)
+   206→    }
+   207→  }
+   208→
+   209→  /* ---------- image tools ---------- */
+   210→  const [imgResults, setImgResults] = React.useState<string[]>([])
+   211→  const [imgBusy, setImgBusy] = React.useState(false)
+   212→  const [uploading, setUploading] = React.useState(false)
+   213→  const fileRef = React.useRef<HTMLInputElement>(null)
+   214→
+   215→  const searchImages = async () => {
+   216→    const query = (form.name || '').trim()
+   217→    if (!query) { toast.error('اول نام محصول را بنویسید'); return }
+   218→    setImgBusy(true)
+   219→    try {
+   220→      const res = await api.post<{ images: string[]; error?: string }>('/api/products/image-search', { query })
+   221→      if (!res.images?.length) {
+   222→        toast.info('جستجوی وب در دسترس نیست')
+   223→        setImgResults([])
+   224→      } else {
+   225→        setImgResults(res.images)
+   226→        toast.success(`${toFaDigits(res.images.length)} تصویر پیدا شد`)
+   227→      }
+   228→    } catch {
+   229→      toast.info('جستجوی وب در دسترس نیست')
+   230→    } finally {
+   231→      setImgBusy(false)
+   232→    }
+   233→  }
+   234→
+   235→  const applyImage = async (imageUrl: string) => {
+   236→    setForm((f) => ({ ...f, imageUrl }))
+   237→    if (editing?.id) {
+   238→      try {
+   239→        await api.patch('/api/products/image', { id: editing.id, imageUrl, userId: user.id, userName: user.name })
+   240→        toast.success('تصویر بروزرسانی شد')
+   241→      } catch (e) {
+   242→        toast.error(e instanceof Error ? e.message : 'خطا در ثبت تصویر')
+   243→      }
+   244→    }
+   245→    setProducts((ps) => ps.map((p) => (editing?.id && p.id === editing.id ? { ...p, imageUrl } : p)))
+   246→  }
+   247→
+   248→  const onPickFile = async (file: File | undefined) => {
+   249→    if (!file) return
+   250→    setUploading(true)
+   251→    try {
+   252→      const dataUrl = await fileToDataUrl(file)
+   253→      await applyImage(dataUrl)
+   254→      if (!editing?.id) toast.success('تصویر پیوست شد — با ذخیره محصول ثبت می‌شود')
+   255→    } catch {
+   256→      toast.error('خواندن تصویر ناموفق بود')
+   257→    } finally {
+   258→      setUploading(false)
+   259→      if (fileRef.current) fileRef.current.value = ''
+   260→    }
+   261→  }
+   262→
+   263→  /* ---------- import wizard (Holoo Excel) ---------- */
+   264→  const [importOpen, setImportOpen] = React.useState(false)
+   265→  const [parsing, setParsing] = React.useState(false)
+   266→  const [parsed, setParsed] = React.useState<ParseResult | null>(null)
+   267→  const [fileName, setFileName] = React.useState('')
+   268→  const [mergeOpt, setMergeOpt] = React.useState<'fill-empty' | 'merge-stock'>('fill-empty')
+   269→  const [committing, setCommitting] = React.useState(false)
+   270→  const xlsxRef = React.useRef<HTMLInputElement>(null)
+   271→
+   272→  const openImport = () => { setParsed(null); setFileName(''); setMergeOpt('fill-empty'); setImportOpen(true) }
+   273→
+   274→  const onXlsx = async (file: File | undefined) => {
+   275→    if (!file) return
+   276→    setFileName(file.name)
+   277→    setParsing(true)
+   278→    try {
+   279→      const res = await uploadFile<ParseResult>('/api/products/parse', file)
+   280→      setParsed(res)
+   281→      if (!res.rows?.length) toast.info('ردیفی در فایل پیدا نشد')
+   282→    } catch (e) {
+   283→      toast.error(e instanceof Error ? e.message : 'خطا در پردازش فایل')
+   284→    } finally {
+   285→      setParsing(false)
+   286→      if (xlsxRef.current) xlsxRef.current.value = ''
+   287→    }
+   288→  }
+   289→
+   290→  const commitImport = async () => {
+   291→    if (!parsed?.rows?.length) return
+   292→    setCommitting(true)
+   293→    try {
+   294→      const rows = parsed.rows.map((r) =>
+   295→        mergeOpt === 'merge-stock' && r.status === 'duplicate' ? { ...r, action: 'merge-stock' } : r
+   296→      )
+   297→      const res = await api.post<{ created: number; merged: number; skipped: number }>('/api/products/commit', {
+   298→        rows,
+   299→        userId: user.id,
+   300→        userName: user.name,
+   301→      })
+   302→      toast.success(`ورود انجام شد — جدید: ${toFaDigits(res.created)} | ادغام: ${toFaDigits(res.merged)} | رد شده: ${toFaDigits(res.skipped)}`)
+   303→      setImportOpen(false)
+   304→      void load()
+   305→    } catch (e) {
+   306→      toast.error(e instanceof Error ? e.message : 'خطا در ورود اطلاعات')
+   307→    } finally {
+   308→      setCommitting(false)
+   309→    }
+   310→  }
+   311→
+   312→  /* ---------- render ---------- */
+   313→  return (
+   314→    <div>
+   315→      <SectionHeader
+   316→        title="کالاها | Products"
+   317→        subtitle="مرجع قیمت، بارکد و موجودی فروشگاه"
+   318→        icon={<PackageSearch className="h-5 w-5" />}
+   319→        actions={
+   320→          manage ? (
+   321→            <>
+   322→              <GoldButton onClick={openImport} className="min-h-[44px]">
+   323→                <FileSpreadsheet className="h-4 w-4" /> ورود از Holoo (Excel)
+   324→              </GoldButton>
+   325→              <PrimaryButton onClick={() => openEdit(null)} className="min-h-[44px]">
+   326→                <Plus className="h-4 w-4" /> کالای جدید
+   327→              </PrimaryButton>
+   328→            </>
+   329→          ) : undefined
+   330→        }
+   331→      />
+   332→
+   333→      {!manage && (
+   334→        <Card className="mb-4 flex items-start gap-3 border-[#EAD9A8] bg-[#FBF6E8] p-4">
+   335→          <Info className="mt-0.5 h-5 w-5 shrink-0 text-[#B8860B]" />
+   336→          <p className="text-sm leading-6 text-[#6B5B2A]">{MANAGE_HINT}</p>
+   337→        </Card>
+   338→      )}
+   339→
+   340→      {/* filters */}
+   341→      <Card className="mb-4 p-4">
+   342→        <div className="flex flex-col gap-3">
+   343→          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+   344→            <div className="relative flex-1">
+   345→              <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#A8A28C]" />
+   346→              <input
+   347→                value={qInput}
+   348→                onChange={(e) => setQInput(e.target.value)}
+   349→                placeholder="جستجو: نام، نام فارسی یا بارکد…"
+   350→                className={`${inputCls} min-h-[44px] pr-9`}
+   351→                aria-label="جستجوی کالا"
+   352→              />
+   353→            </div>
+   354→            <GhostButton
+   355→              onClick={() => setLow((v) => !v)}
+   356→              className={`min-h-[44px] shrink-0 ${low ? 'border-[#B45309] bg-amber-50 text-amber-800' : ''}`}
+   357→              aria-pressed={low}
+   358→            >
+   359→              <PackageSearch className="h-4 w-4" /> کمبود موجودی
+   360→            </GhostButton>
+   361→            <span className="shrink-0 rounded-full border border-[#E4DCC8] bg-white px-3 py-1.5 text-xs font-semibold text-[#6B7A66]">
+   362→              {toFaDigits(products.length)} کالا
+   363→            </span>
+   364→          </div>
+   365→          <div className="flex items-center gap-2 overflow-x-auto pb-1 pz-scroll">
+   366→            <button
+   367→              type="button"
+   368→              onClick={() => setCategory('')}
+   369→              className={`min-h-[36px] shrink-0 rounded-full border px-3.5 text-xs font-semibold transition ${category === '' ? 'border-[#3E6B4A] bg-[#3E6B4A] text-white' : 'border-[#E4DCC8] bg-white text-[#4A5A44] hover:border-[#5F8F55]'}`}
+   370→            >
+   371→              همه دسته‌ها
+   372→            </button>
+   373→            {categories.map((c) => (
+   374→              <button
+   375→                key={c}
+   376→                type="button"
+   377→                onClick={() => setCategory(category === c ? '' : c)}
+   378→                className={`min-h-[36px] shrink-0 rounded-full border px-3.5 text-xs font-semibold transition ${category === c ? 'border-[#3E6B4A] bg-[#3E6B4A] text-white' : 'border-[#E4DCC8] bg-white text-[#4A5A44] hover:border-[#5F8F55]'}`}
+   379→              >
+   380→                {c}
+   381→              </button>
+   382→            ))}
+   383→          </div>
+   384→        </div>
+   385→      </Card>
+   386→
+   387→      {loading ? (
+   388→        <Loading label="در حال دریافت کالاها…" />
+   389→      ) : products.length === 0 ? (
+   390→        <EmptyState icon={<PackageSearch className="h-10 w-10" />} title="کالایی پیدا نشد" hint="فیلترها را عوض کنید یا جستجوی دیگری امتحان کنید." />
+   391→      ) : (
+   392→        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4">
+   393→          {products.map((p) => (
+   394→            <Card key={p.id} className="relative flex flex-col gap-2 p-4">
+   395→              {manage && (
+   396→                <button
+   397→                  type="button"
+   398→                  onClick={() => openEdit(p)}
+   399→                  className="absolute end-2.5 top-2.5 flex h-9 w-9 items-center justify-center rounded-full border border-[#E4DCC8] bg-white text-[#4A5A44] shadow-sm transition hover:border-[#5F8F55] hover:text-[#3E6B4A]"
+   400→                  title="ویرایش کالا"
+   401→                  aria-label={`ویرایش ${p.name}`}
+   402→                >
+   403→                  <Pencil className="h-4 w-4" />
+   404→                </button>
+   405→              )}
+   406→              <ProductImage src={p.imageUrl} name={p.name} size={56} />
+   407→              <div className="min-w-0">
+   408→                <div className="truncate text-sm font-bold text-[#253A2A]" title={p.name}>{p.name}</div>
+   409→                {p.nameFa && <div className="truncate text-xs text-[#6B7A66]" title={p.nameFa}>{p.nameFa}</div>}
+   410→              </div>
+   411→              {p.barcode && <div className="pz-barcode text-xs text-[#8A9884]">{p.barcode}</div>}
+   412→              <div className="flex items-center justify-between gap-2">
+   413→                <Money value={p.sellPrice} className="text-sm font-bold text-[#8A6508]" />
+   414→                <StockBadge stock={p.stock} minStock={p.minStock} />
+   415→              </div>
+   416→              <div className="mt-auto flex items-end justify-between border-t border-[#EFEAD8] pt-2">
+   417→                <div className="flex items-baseline gap-1">
+   418→                  <span className={`text-3xl font-black leading-none tabular-nums ${stockDot(p.stock, p.minStock)}`}>
+   419→                    {toFaDigits(Math.floor(p.stock))}
+   420→                  </span>
+   421→                  {p.unit && <span className="text-[10px] text-[#8A9884]">{p.unit}</span>}
+   422→                </div>
+   423→                <span className="text-[10px] font-medium text-[#8A9884]">موجودی</span>
+   424→              </div>
+   425→            </Card>
+   426→          ))}
+   427→        </div>
+   428→      )}
+   429→
+   430→      {/* ---------- edit / add modal ---------- */}
+   431→      <Modal open={editOpen} onClose={() => setEditOpen(false)} wide title={editing ? `ویرایش: ${editing.name}` : 'کالای جدید'}>
+   432→        <div className="space-y-4">
+   433→          {/* image tools */}
+   434→          <div className="rounded-2xl border border-[#E4DCC8] bg-white/70 p-4">
+   435→            <div className="flex items-center gap-3">
+   436→              <ProductImage src={form.imageUrl} name={form.name || 'محصول'} size={72} />
+   437→              <div className="flex flex-1 flex-wrap gap-2">
+   438→                <GhostButton onClick={searchImages} disabled={imgBusy || uploading} className="min-h-[44px]">
+   439→                  {imgBusy ? <Spinner /> : <Globe className="h-4 w-4" />} جستجوی عکس در وب | Find image online
+   440→                </GhostButton>
+   441→                <GhostButton onClick={() => fileRef.current?.click()} disabled={uploading || imgBusy} className="min-h-[44px]">
+   442→                  {uploading ? <Spinner /> : <ImagePlus className="h-4 w-4" />} بارگذاری عکس از دستگاه
+   443→                </GhostButton>
+   444→                {form.imageUrl && (
+   445→                  <GhostButton onClick={() => setF('imageUrl', null)} className="min-h-[44px]">
+   446→                    <RotateCcw className="h-4 w-4" /> حذف عکس
+   447→                  </GhostButton>
+   448→                )}
+   449→                <input
+   450→                  ref={fileRef}
+   451→                  type="file"
+   452→                  accept="image/*"
+   453→                  className="hidden"
+   454→                  onChange={(e) => void onPickFile(e.target.files?.[0])}
+   455→                  aria-hidden
+   456→                />
+   457→              </div>
+   458→            </div>
+   459→            {imgResults.length > 0 && (
+   460→              <div className="mt-3 flex gap-2 overflow-y-auto pz-scroll p-1" style={{ maxHeight: '10rem' }}>
+   461→                {imgResults.map((u) => (
+   462→                  <Thumb key={u} src={u} name={form.name} onClick={() => void applyImage(u)} />
+   463→                ))}
+   464→              </div>
+   465→            )}
+   466→          </div>
+   467→
+   468→          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+   469→            <Field label="نام (انگلیسی)" required>
+   470→              <input value={form.name} onChange={(e) => setF('name', e.target.value)} className={inputCls} placeholder="Kalleh Milk 1L" />
+   471→            </Field>
+   472→            <Field label="نام فارسی">
+   473→              <input value={form.nameFa} onChange={(e) => setF('nameFa', e.target.value)} className={inputCls} placeholder="شیر کاله ۱ لیتری" />
+   474→            </Field>
+   475→            <Field label="بارکد">
+   476→              <input value={form.barcode} onChange={(e) => setF('barcode', e.target.value)} className={`${inputCls} pz-barcode`} placeholder="6260…" dir="ltr" />
+   477→            </Field>
+   478→            <Field label="دسته">
+   479→              <input value={form.category} onChange={(e) => setF('category', e.target.value)} className={inputCls} list="pz-category-list" placeholder="لبنیات" />
+   480→              <datalist id="pz-category-list">
+   481→                {categories.map((c) => <option key={c} value={c} />)}
+   482→              </datalist>
+   483→            </Field>
+   484→            <Field label="قیمت خرید (تومان)">
+   485→              <input type="number" min={0} value={form.buyPrice} onChange={(e) => setF('buyPrice', e.target.value)} className={inputCls} dir="ltr" />
+   486→            </Field>
+   487→            <Field label="قیمت فروش (تومان)">
+   488→              <input type="number" min={0} value={form.sellPrice} onChange={(e) => setF('sellPrice', e.target.value)} className={inputCls} dir="ltr" />
+   489→            </Field>
+   490→            <Field label="قیمت فروش ۲ (تخفیف‌دار)">
+   491→              <input type="number" min={0} value={form.sellPrice2} onChange={(e) => setF('sellPrice2', e.target.value)} className={inputCls} dir="ltr" placeholder="اختیاری" />
+   492→            </Field>
+   493→            <Field label="واحد">
+   494→              <input value={form.unit} onChange={(e) => setF('unit', e.target.value)} className={inputCls} placeholder="عدد / بسته / کیلو" />
+   495→            </Field>
+   496→            <Field label="موجودی">
+   497→              <input type="number" value={form.stock} onChange={(e) => setF('stock', e.target.value)} className={inputCls} dir="ltr" />
+   498→            </Field>
+   499→            <Field label="حداقل موجودی" hint="زیر این عدد، در تب کمبود موجودی انبار می‌آید">
+   500→              <input type="number" value={form.minStock} onChange={(e) => setF('minStock', e.target.value)} className={inputCls} dir="ltr" />
+   501→            </Field>
+   502→            <Field label="شرکت / برند">
+   503→              <select value={form.companyId} onChange={(e) => setF('companyId', e.target.value)} className={inputCls}>
+   504→                <option value="">— بدون شرکت —</option>
+   505→                {companies.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+   506→              </select>
+   507→            </Field>
+   508→            <Field label="تامین‌کننده">
+   509→              <select value={form.supplierId} onChange={(e) => setF('supplierId', e.target.value)} className={inputCls}>
+   510→                <option value="">— بدون تامین‌کننده —</option>
+   511→                {suppliers.map((s) => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
+   512→              </select>
+   513→            </Field>
+   514→          </div>
+   515→          <label className="flex min-h-[44px] items-center gap-2 text-sm font-semibold text-[#4A5A44]">
+   516→            <input type="checkbox" checked={form.active} onChange={(e) => setF('active', e.target.checked)} className="h-4 w-4 accent-[#3E6B4A]" />
+   517→            فعال (در فروش و نمایش باشد)
+   518→          </label>
+   519→
+   520→          <div className="flex justify-end gap-2 border-t border-[#EFEAD8] pt-3">
+   521→            <GhostButton onClick={() => setEditOpen(false)} className="min-h-[44px]">انصراف</GhostButton>
+   522→            <PrimaryButton onClick={() => void saveProduct()} disabled={saving} className="min-h-[44px]">
+   523→              {saving ? <Spinner /> : <Plus className="h-4 w-4" />} ذخیره محصول
+   524→            </PrimaryButton>
+   525→          </div>
+   526→        </div>
+   527→      </Modal>
+   528→
+   529→      {/* ---------- import wizard ---------- */}
+   530→      <Modal open={importOpen} onClose={() => setImportOpen(false)} wide title="ورود گروهی از Holoo (Excel)">
+   531→        <div className="space-y-4">
+   532→          {/* Step A — file + preview */}
+   533→          <div>
+   534→            <div className="mb-2 flex items-center gap-2 text-sm font-bold text-[#253A2A]">
+   535→              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#3E6B4A] text-xs text-white">۱</span>
+   536→              انتخاب فایل اکسل
+   537→            </div>
+   538→            <input
+   539→              ref={xlsxRef}
+   540→              type="file"
+   541→              accept=".xls,.xlsx,.csv"
+   542→              className="hidden"
+   543→              onChange={(e) => void onXlsx(e.target.files?.[0])}
+   544→              aria-hidden
+   545→            />
+   546→            <button
+   547→              type="button"
+   548→              onClick={() => xlsxRef.current?.click()}
+   549→              className="flex min-h-[88px] w-full flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-[#D8D2BC] bg-white/70 px-4 py-4 text-center transition hover:border-[#5F8F55] hover:bg-[#F3F7EF]"
+   550→            >
+   551→              <Upload className="h-5 w-5 text-[#5F8F55]" />
+   552→              <span className="text-sm font-semibold text-[#4A5A44]">
+   553→                {fileName ? fileName : 'فایل خروجی Holoo را بکشید یا کلیک کنید (.xlsx / .csv)'}
+   554→              </span>
+   555→              {parsing && <span className="flex items-center gap-2 text-xs text-[#8A9884]"><Spinner /> در حال پردازش فایل…</span>}
+   556→            </button>
+   557→          </div>
+   558→
+   559→          {parsed && (
+   560→            <>
+   561→              <div>
+   562→                <div className="mb-2 flex items-center gap-2 text-sm font-bold text-[#253A2A]">
+   563→                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#3E6B4A] text-xs text-white">۲</span>
+   564→                  بازبینی ردیف‌ها
+   565→                </div>
+   566→                <div className="mb-2 flex flex-wrap gap-2 text-xs">
+   567→                  <Badge className="border-[#E4DCC8] bg-white text-[#4A5A44]">کل: {toFaDigits(parsed.total)}</Badge>
+   568→                  <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">جدید: {toFaDigits(parsed.news)}</Badge>
+   569→                  <Badge className="border-amber-200 bg-amber-50 text-amber-700">تکراری: {toFaDigits(parsed.duplicates)}</Badge>
+   570→                  <Badge className="border-rose-200 bg-rose-50 text-rose-700">نامعتبر: {toFaDigits(parsed.invalid)}</Badge>
+   571→                </div>
+   572→                <div className="max-h-80 overflow-y-auto pz-scroll rounded-2xl">
+   573→                  <table className="w-full min-w-[560px] text-right text-xs">
+   574→                    <thead>
+   575→                      <tr className="bg-[#F5F2E8] text-[#4A5A44]">
+   576→                        <th className="border-b border-[#E4DCC8] px-2 py-2 font-bold">وضعیت</th>
+   577→                        <th className="border-b border-[#E4DCC8] px-2 py-2 font-bold">نام</th>
+   578→                        <th className="border-b border-[#E4DCC8] px-2 py-2 font-bold">بارکد</th>
+   579→                        <th className="border-b border-[#E4DCC8] px-2 py-2 font-bold">خرید</th>
+   580→                        <th className="border-b border-[#E4DCC8] px-2 py-2 font-bold">فروش</th>
+   581→                        <th className="border-b border-[#E4DCC8] px-2 py-2 font-bold">موجودی</th>
+   582→                        <th className="border-b border-[#E4DCC8] px-2 py-2 font-bold">دسته</th>
+   583→                        <th className="border-b border-[#E4DCC8] px-2 py-2 font-bold">ادغام با</th>
+   584→                      </tr>
+   585→                    </thead>
+   586→                    <tbody>
+   587→                      {parsed.rows.map((r, i) => (
+   588→                        <tr key={`${r.barcode}-${i}`} className="bg-white even:bg-[#FBF9F3]">
+   589→                          <td className="border-b border-[#EFEAD8] px-2 py-1.5"><StatusChip status={r.status} /></td>
+   590→                          <td className="max-w-40 truncate border-b border-[#EFEAD8] px-2 py-1.5 font-medium" title={r.name}>{r.name || '—'}</td>
+   591→                          <td className="pz-barcode border-b border-[#EFEAD8] px-2 py-1.5" dir="ltr">{r.barcode || '—'}</td>
+   592→                          <td className="border-b border-[#EFEAD8] px-2 py-1.5 tabular-nums">{toFaDigits(r.buyPrice)}</td>
+   593→                          <td className="border-b border-[#EFEAD8] px-2 py-1.5 tabular-nums">{toFaDigits(r.sellPrice)}</td>
+   594→                          <td className="border-b border-[#EFEAD8] px-2 py-1.5 tabular-nums">{toFaDigits(r.stock)}</td>
+   595→                          <td className="border-b border-[#EFEAD8] px-2 py-1.5">{r.category || '—'}</td>
+   596→                          <td className="border-b border-[#EFEAD8] px-2 py-1.5">
+   597→                            {r.duplicateOfId ? <span className="font-bold text-amber-700">#{toFaDigits(r.duplicateOfId)}</span> : '—'}
+   598→                          </td>
+   599→                        </tr>
+   600→                      ))}
+   601→                    </tbody>
+   602→                  </table>
+   603→                </div>
+   604→              </div>
+   605→
+   606→              {/* Step B — merge option + commit */}
+   607→              <div>
+   608→                <div className="mb-2 flex items-center gap-2 text-sm font-bold text-[#253A2A]">
+   609→                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#3E6B4A] text-xs text-white">۳</span>
+   610→                  رفتار اقلام تکراری
+   611→                </div>
+   612→                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+   613→                  <label className={`flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-sm ${mergeOpt === 'fill-empty' ? 'border-[#3E6B4A] bg-[#F3F7EF] font-semibold text-[#3E6B4A]' : 'border-[#E4DCC8] bg-white text-[#4A5A44]'}`}>
+   614→                    <input type="radio" name="merge-opt" checked={mergeOpt === 'fill-empty'} onChange={() => setMergeOpt('fill-empty')} className="h-4 w-4 accent-[#3E6B4A]" />
+   615→                    فقط فیلدهای خالی را پر کن (پیش‌فرض)
+   616→                  </label>
+   617→                  <label className={`flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-sm ${mergeOpt === 'merge-stock' ? 'border-[#3E6B4A] bg-[#F3F7EF] font-semibold text-[#3E6B4A]' : 'border-[#E4DCC8] bg-white text-[#4A5A44]'}`}>
+   618→                    <input type="radio" name="merge-opt" checked={mergeOpt === 'merge-stock'} onChange={() => setMergeOpt('merge-stock')} className="h-4 w-4 accent-[#3E6B4A]" />
+   619→                    موجودی اقلام تکراری اضافه شود
+   620→                  </label>
+   621→                </div>
+   622→                <div className="mt-3 flex justify-end">
+   623→                  <PrimaryButton onClick={() => void commitImport()} disabled={committing || !parsed.rows.length} className="min-h-[44px]">
+   624→                    {committing ? <Spinner /> : <FileSpreadsheet className="h-4 w-4" />} ثبت نهایی ورود اطلاعات
+   625→                  </PrimaryButton>
+   626→                </div>
+   627→              </div>
+   628→            </>
+   629→          )}
+   630→        </div>
+   631→      </Modal>
+   632→    </div>
+   633→  )
+   634→}
+   635→

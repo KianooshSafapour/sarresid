@@ -1,0 +1,328 @@
+     1→# Hyper Zeytoon Platform — Worklog
+     2→
+     3→## Project
+     4→Supermarket workflow management platform for "Hyper Zeytoon" (Kerman, Iran).
+     5→Stack (sandbox): Next.js 16 App Router + TypeScript + Prisma/SQLite + Tailwind 4 + shadcn/ui + recharts + zustand.
+     6→(Single route `/`; all views are client-side sections switched via zustand store `useApp`.)
+     7→
+     8→## Key facts
+     9→- DB seeded: 16 users (PINs in prisma/seed.ts), 12 companies, 5 suppliers, 32 products, 26 Iranian holidays, sample orders/cheques/tasks/SOPs/planograms/preorders/notifications.
+    10→- Jalali utilities: `src/lib/jalali.ts` (fmtJalali, fmtJalaliLong, fmtJalaliTime, toFaDigits, todayISO, addDaysISO, daysBetweenISO, fmtMoney).
+    11→- Types/role helpers: `src/lib/types.ts` (PUser, Role, ROLE_LABELS, hasRole, status maps).
+    12→- API client: `src/lib/api.ts` (api.get/post/patch/del, downloadFile, uploadFile).
+    13→- Store: `src/lib/store.ts` (useApp: user, view, setView, openOrder).
+    14→- Design kit: `src/components/platform/kit.tsx` (Card, GlowCard, SectionHeader, StatCard, Badge, StatusBadge, StockBadge, stockDot, RoleBadge, Avatar, Field, inputCls, PrimaryButton, GoldButton, GhostButton, DangerButton, EmptyState, Loading, Spinner, Modal, Tabs, TableWrap, Th, Td, Money, TimeAgo, ProductImage, PatternBg).
+    15→- Jalali picker: `src/components/platform/JalaliCalendar.tsx` (JalaliCalendar, JalaliDateField).
+    16→- Design tokens in globals.css: pz-glow-border, pz-page-bg, pz-sidebar, pz-gold-text, pz-scroll, pz-lift, pz-barcode.
+    17→
+    18→## API CONTRACT (all agents MUST follow)
+    19→- All APIs under `src/app/api/<name>/route.ts`. NextResponse JSON. Auth: every mutating route accepts `userId` in body/query (simple pin-less identity from client session; PIN check only on login).
+    20→- Audit: mutations append `db.auditLog.create({data:{userId,userName,action,entity,entityId,detail}})`.
+    21→- Notifications: create via `db.notification.create` for role-relevant users.
+    22→- Points: award via `db.pointsLog.create` + increment `db.user.points`.
+    23→
+    24→## Task log
+    25→---
+    26→Task ID: 2-a
+    27→Agent: main
+    28→Task: Schema + push + seed
+    29→
+    30→Work Log:
+    31→- Installed jalaali-js, xlsx.
+    32→- Wrote full Prisma schema (User, Company, Supplier, SupplierCompany, Product, Order, OrderItem, OrderEvent, Cheque, Holiday, Task, SOP, WallPost, PersonalNote, Feedback, Idea, Conversation, Message, AuditLog, PointsLog, Notification, Setting, Planogram, WarehouseRequest, CustomerRequest, Customer, PreOrder).
+    33→- db:push OK; seed.ts run OK (16 users, 32 products, orders HZ-1001..1007 in all statuses, cheques, holidays 1404-1405).
+    34→
+    35→Stage Summary:
+    36→- Database fully seeded and ready for API + frontend development.
+    37→
+    38→---
+    39→Task ID: 2-b
+    40→Agent: main
+    41→Task: Shared libs + design system
+    42→
+    43→Work Log:
+    44→- src/lib/jalali.ts, types.ts, api.ts, store.ts
+    45→- src/components/platform/kit.tsx + JalaliCalendar.tsx
+    46→- globals.css design tokens (paisley/girih patterns, glow borders, scrollbars)
+    47→
+    48→Stage Summary:
+    49→- All shared contracts defined; agents must reuse them exactly.
+    50→
+    51→## API CONTRACTS (agreed for agents 3-a / 3-b)
+    52→
+    53→### 3-a: Core APIs
+    54→- POST /api/auth/login {userId, pin} → PUser (validates pin, active)
+    55→- GET /api/users → list (no pin). POST /api/users {name,pin,roles,color}. PATCH /api/users {id, ...fields, active}
+    56→- GET /api/products?q=&category=&low=&supplierId= → {products, categories}. POST /api/products {name,barcode,buyPrice,sellPrice,...}. PATCH /api/products {id,...}. 
+    57→- POST /api/products/parse (multipart file) → {rows:[{name,barcode,buyPrice,sellPrice,stock,category,duplicateOfId?,status:'new'|'duplicate'|'merge'}], total} (xlsx parse, header mapping fuzzy)
+    58→- POST /api/products/commit {rows:[...]} → imports with merge/skip/create strategies
+    59→- POST /api/products/image-search {query} → {images:[url...] } (uses z-ai-web-dev-sdk backend image search; fallback empty + error field)
+    60→- PATCH /api/products/image {id, imageUrl} 
+    61→- GET /api/suppliers → {suppliers with companies+productCount}. POST /api/suppliers {name,kind,companyIds,paymentTerms,chequeDays,phone}. PATCH /api/suppliers
+    62→- GET /api/companies → {companies with supplier names + products w/ stock}
+    63→- GET /api/orders?status=&supplierId=&active= → {orders incl supplier, item count, total}
+    64→- POST /api/orders {supplierId, receivingDate, paymentType, note, items:[{productId,name,barcode,qty,unitCost,sellPrice}]} → creates DRAFT|SUBMITTED (sendStatus), event, notifications, audit
+    65→- GET /api/orders/[id] → full order (items, events, supplier, cheques)
+    66→- PATCH /api/orders/[id] {action:'update'|'submit'|'approve'|'reject'|'cancel'|'correct'|'receive'|'confirm'|'done'|'updatePayment', userId, ...} → lifecycle transitions:
+    67→  - update: edit items (only DRAFT/SUBMITTED), recalc totals
+    68→  - submit → SUBMITTED (notify GM), approve → APPROVED (notify inv+delivery), correct → append correction + event
+    69→  - receive: {items:[{id,deliveredQty,printedPrice,status,note,finalCost}], userId} → status RECEIVED, deliveredAt, recalc from delivered, notify inventory+accountant, audit
+    70→  - confirm: same shape → CONFIRMED (recalc confirmedQty), notify accountant
+    71→  - done: → DONE, notify GM/PM/owner
+    72→  - Each transition: OrderEvent + AuditLog + notifications
+    73→- GET /api/export/order/[id] → xlsx file (SheetJS): columns barcode/name FA name/qty/unit cost/printed price/discount/tax/vat/total; header block w/ order code, supplier, totals
+    74→- GET /api/dashboard → counts (orders by status, low stock, cheques pending, tasks open), charts (orders/day last 14d, spend/day, top suppliers), recent events, staff points leaderboard
+    75→
+    76→### 3-b: Secondary APIs
+    77→- GET /api/cheques?status= | POST /api/cheques {orderId?,purpose,amount,dueDate,recipientName,recipientPhone,payee,note,createdById} (holiday check server-side flag if dueDate is holiday) | PATCH /api/cheques {id,action:'approve'|'write'|'sign'|'give'|'collect'|'reject'|'reschedule'|'break', decidedById, newDueDate?, amount?...}
+    78→- GET /api/holidays → {holidays:[{date,title}]}; POST /api/holidays {date,title}; DELETE /api/holidays?date=
+    79→- GET /api/tasks?mine=1&userId= → tasks w/ users; POST /api/tasks; PATCH /api/tasks {id,action:'start'|'pause'|'done'|'reopen'|'cancel',pauseReason,userId} (+points on done: +3, +5 urgent; notify assignee/creator)
+    80→- GET /api/sops; POST /api/sops {title,department,steps[],createdById}; PATCH; DELETE /api/sops?id=
+    81→- GET /api/wall; POST /api/wall {userId,content}; PATCH /api/wall {id,pinned}
+    82→- GET/POST /api/notes (by userId); PATCH/DELETE /api/notes?id=
+    83→- GET /api/feedback (managers); POST /api/feedback {content,rating}
+    84→- GET /api/ideas; POST /api/ideas {userId,title,content}; PATCH /api/ideas {id,status,decision,decidedById} (+points if ACCEPTED/IMPLEMENTED)
+    85→- GET /api/conversations?userId= → conversations w/ last message + unread; POST /api/conversations {userAId,userBId} → create if missing
+    86→- GET /api/messages?conversationId=&userId=; POST /api/messages {conversationId,senderId,content} (mark others' notifications); PATCH /api/messages {conversationId,userId} → mark read
+    87→- GET /api/audit?limit=100&entity=&userId=; GET /api/audit/stats → counts per user/entity
+    88→- POST /api/points {userId,points,reason,awardedById}
+    89→- GET /api/planograms; POST /api/planograms {name,layout,createdById,assignedToId}; PATCH /api/planograms {id,action:'publish'|'update'|'archive',...} (notify merchandiser on publish)
+    90→- GET /api/warehouse-requests; POST {productId,qty,requestedById,note}; PATCH {id,action:'prepare'|'receive'|'cancel'}
+    91→- GET /api/customer-requests; POST {name,barcode?,requestedById} (upsert: if name exists increment count); PATCH {id,note}
+    92→- GET /api/customers; POST {name,phone,preference,createdById}; PATCH /api/customers
+    93→- GET /api/preorders?status=; POST {customerId,customerName,salespersonId,items,note}; PATCH {id,action:'prepare'|'done'|'cancel',cashierId}
+    94→- GET /api/notifications?userId=&limit=30; PATCH /api/notifications {id|all,userId}
+    95→- GET /api/settings; PATCH /api/settings {key,value}
+    96→- POST /api/holidays/fetch → tries online source (time.ir/api.keybit.ir), upserts, returns {added,source}; safe fallback {}
+    97→- GET /api/users → also used by admin
+    98→
+    99→## FRONTEND CONTRACT (agents 5-x)
+   100→- Each section: `export default function XSection({ user }: { user: PUser })` in `src/components/platform/XSection.tsx`. 'use client'. Use kit + api + jalali + types only. No imports of other sections.
+   101→- page.tsx (main) renders shell + switches sections; all data fetching inside sections via api.ts.
+   102→
+   103→---
+   104→Task ID: 3-a
+   105→Agent: full-stack agent
+   106→Task: Core APIs (auth/users/products/suppliers/companies/orders/export/dashboard)
+   107→
+   108→Work Log:
+   109→- POST /api/auth/login: pin+active validation → 401 {error:'کد ورود اشتباه است'}; returns user w/o pin; audit LOGIN.
+   110→- /api/users: GET (no pin, by id), POST (USER_CREATE), PATCH (pin '' keeps old pin, USER_UPDATE).
+   111→- /api/products: GET ?q (name/nameFa/barcode contains) &category&supplierId&low=1 (stock<=minStock && !mergedInto, post-filtered) &limit (default 500) → {products(+company/supplier id+name), categories(distinct)}; POST/PATCH with audits PRODUCT_CREATE/PRODUCT_UPDATE.
+   112→- /api/products/parse: multipart 'file' → xlsx sheet_to_json header-row detection (scans first 10 rows, fuzzy EN/FA header map: نام/name/kala/شرح→name, بارکد/barcode/code→barcode, قیمت خرید/buy/cost→buyPrice, قیمت فروش/sell→sellPrice, موجودی/stock/تعداد→stock, گروه/دسته/category→category). Barcode normalized to string (.0 stripped, Persian digits converted). Duplicate = barcode exact OR normalized-name (lowercase, spaces/dashes/ZWNJ removed) → duplicateOfId+'duplicate'; rows w/o name+barcode → 'invalid'. Returns {rows,total,invalid,duplicates,news}; read-only, no audit.
+   113→- /api/products/commit: status new→create (minStock=defaultMinStock), duplicate→fill only empty barcode/buyPrice/sellPrice/category of existing (action 'merge-stock' additionally adds stock), invalid→skip; per-row + summary PRODUCT_IMPORT audits → {created,merged,skipped}.
+   114→- /api/products/image-search: uses z-ai-web-dev-sdk `zai.images.search.create({query,count:8})` (verified from SDK .d.ts — not functions.invoke) → {images:[urls≤8]}; any failure → 200 {images:[],error}.
+   115→- /api/products/image PATCH: saves imageUrl, audit PRODUCT_IMAGE.
+   116→- /api/suppliers: GET (companies+product _count, name asc); POST creates supplier + SupplierCompany links; PATCH replaces links when companyIds given; audits SUPPLIER_CREATE/UPDATE.
+   117→- /api/companies: GET (products w/ stock + suppliers), POST, PATCH; audits COMPANY_CREATE/UPDATE.
+   118→- /api/orders GET: ?status&supplierId&active=1 (active=DRAFT..CONFIRMED) incl supplier{id,name,paymentTerms,chequeDays}, items{qty,deliveredQty,confirmedQty,unitCost}, _count.items, createdAt desc. POST: code HZ-(1000+count+1) w/ unique-retry, subtotal=Σqty*unitCost, vat=0, total=subtotal, items+event CREATED, audit ORDER_CREATE; SUBMITTED → notify GENERAL_MANAGERs ('سفارش جدید' / 'Order {code} awaiting approval').
+   119→- /api/orders/[id] GET: items(+product), events asc, supplier, cheques. PATCH actions: update (DRAFT/SUBMITTED only; delete-removed + upsert + recalc), submit (notify GM), approve (approvedAt; notify INVENTORY_SUPERVISOR/DELIVERY_RECEIVER/PRODUCT_MANAGER), reject (→DRAFT, reason appended to note, notify creator), correct (APPROVED/RECEIVED/CONFIRMED; appends '[timestamp] user: text' to correction, event CORRECTION), cancel (not DONE/CANCELLED), receive (APPROVED/RECEIVED; deliveredQty/printedPrice/status/note/finalCost per item; subtotal=Σ(finalCost??unitCost)*(deliveredQty??0), vat=subtotal*vatPercent/100 (Setting vatPercent default 9), total=subtotal+vat-discount; RECEIVED+receivedAt; event w/ missing/rejected summary; notify INVENTORY_SUPERVISOR+ACCOUNTANT), confirm (RECEIVED/CONFIRMED; confirmedQty; totals recalc'd from confirmedQty like receive; notify ACCOUNTANT), done (CONFIRMED→DONE+doneAt; notify GM/PM/OWNER; +5 PointsLog+increment to acting user if ACCOUNTANT, reason 'ثبت و بستن سفارش در حسابداری'), updatePayment, addBarcode (set product.barcode if empty; if differs record event only; same→ignore). Each returns fresh full order.
+   120→- /api/export/order/[id] GET: SheetJS xls, sheet 'Invoice', wb.Workbook={Views:[{RTL:true}]}, header block (هایپر زیتون/Order/Supplier/Date) + 10-col table (Barcode…Line Total; lineTotal=(finalCost??unitCost)*(confirmedQty??deliveredQty??qty), vatShare=lineTotal*vatPercent/100 rounded) + totals row; Content-Disposition attachment filename=order-{code}.xls; audit ORDER_EXPORT (userId via ?userId=).
+   121→- /api/dashboard: counts (ordersActive, ordersToday by receivingDate+active, lowStock, chequesPendingOwner, chequesDueSoon WRITTEN/SIGNED/GIVEN ≤7d, tasksOpen, preordersPending, customers), ordersByStatus groupBy, ordersPerDay/spendPerDay 14d buckets 'MM/DD', topSuppliers (5 by count w/ total), lowStockItems (8), recentEvents (12 + order code), staffPoints (top 8), holidays (next 10).
+   122→
+   123→Tested live (all passing): login ok/bad-pin 401, users CRUD, products filters+low, suppliers POST/PATCH links, order lifecycle DRAFT→update→submit→approve→correct→receive(12×28000→vat 30240, total 366240)→confirm(confirmedQty 11→335720)→done(+5 points), export file headers+size, xlsx parse (new/duplicate/invalid detected correctly), commit create/fill/merge-stock/skip, image-search returns real URLs, addBarcode same-ignore/diff-event. Test artifacts cleaned from DB afterwards.
+   124→
+   125→Deviations / notes:
+   126→- 'confirm' also recalcs subtotal/vat/total from confirmedQty (spec only said update confirmedQty) so totals match the invoice; discount preserved.
+   127→- 'done' awards +5 to the acting user only when they hold the ACCOUNTANT role.
+   128→- receive 'discount' comes from body.discount (default 0) and is persisted on the order.
+   129→- low=1 stock<=minStock is a post-filter (SQLite can't compare two columns in Prisma where).
+   130→- Added cheap _count/selects (deliveredQty/confirmedQty/unitCost) to orders list items for client-side progress display.
+   131→- z-ai SDK image search: actual API is `zai.images.search.create` (functions.invoke has no image_search in this SDK version).
+   132→- Left 1 pre-existing lint warning in src/components/platform/kit.tsx (not my file).
+   133→
+   134→Stage Summary:
+   135→- All 13 core API route files implemented per contract, live-tested end-to-end against the seeded DB, lint+tsc clean.
+   136→
+   137→---
+   138→Task ID: 3-b
+   139→Agent: agent-3-b
+   140→Task: Secondary APIs (cheques, holidays, tasks, sops, wall, notes, feedback, ideas, conversations, messages, audit, points, planograms, warehouse-requests, customer-requests, customers, preorders, notifications, settings, holidays/fetch)
+   141→
+   142→Work Log:
+   143→- Created 20 route files under src/app/api/ per contract (list + details in agent-ctx/3-b-agent-3-b.md).
+   144→- cheques: holiday-check on POST dueDate + reschedule (400 {error:'تاریخ سررسید تعطیل است — due date is a holiday', date, title}); PATCH actions approve (OWNER/GM check) / reschedule (WRITTEN+SIGNED only) / write / sign / give / collect / reject / bounce / update; all audited CHEQUE_*; role notifications (OWNER/GM) exclude actor.
+   145→- holidays: GET asc all, POST upsert, DELETE by date (HOLIDAY_ADD/DELETE).
+   146→- holidays/fetch: keybit json (5s timeout) with defensive recursive event-array scan, Jalali→ISO via jalaali-js toGregorian, upsert source WEB, time.ir fallback probe; ALWAYS 200 {added, source, error?}; audit only if added>0.
+   147→- tasks: OPEN-first/priority/dueDate sorting (JS), manual user joins (no Prisma relations on Task), done awards +3/+5(URGENT) points, notifications to assignee/creator, TASK_* audits.
+   148→- sops / wall / notes / feedback / ideas / conversations / messages / audit / points / settings implemented per contract; notes + feedback skip audit by design.
+   149→- ideas: ACCEPTED +20 / IMPLEMENTED +50 pts guarded by status transition (no double award). NOTE: Idea model has no decidedById column — decision actor goes to audit log only (schema untouched, prisma out of scope).
+   150→- planograms: layout JSON stringify/parse; update blocked when ARCHIVED; publish notifies assigned merchandiser.
+   151→- warehouse-requests: receive increments product.stock by qty; prepare notifies requester.
+   152→- customer-requests: Persian name normalization (ي→ی ك→ک ZWNJ, whitespace) for duplicate detection; duplicate increments count, managers notified at 3 & 5; new request +1 point.
+   153→- preorders: manual salesperson/cashier joins, items JSON, total computed; prepare notifies salesperson, done awards +2 pts.
+   154→- notifications: GET with unread count; PATCH single/all mark-read. settings: GET map + PATCH upsert (SETTING audit).
+   155→- Conventions: every mutation audited via db.auditLog.create (except notes/feedback), role notifications via active-user scan with exact role match, points via pointsLog + user.points increment, try/catch → NextResponse 400/500, dynamic = 'force-dynamic' on all routes.
+   156→
+   157→Stage Summary:
+   158→- All 3-b secondary APIs complete and contract-compliant. bun run lint: 0 errors (one pre-existing warning in kit.tsx, not mine). tsc --noEmit: clean for my files. Frontend agents 5-x can consume: /api/cheques, /api/holidays, /api/holidays/fetch, /api/tasks, /api/sops, /api/wall, /api/notes, /api/feedback, /api/ideas, /api/conversations, /api/messages, /api/audit, /api/points, /api/planograms, /api/warehouse-requests, /api/customer-requests, /api/customers, /api/preorders, /api/notifications, /api/settings.
+   159→
+   160→---
+   161→Task ID: 5-e
+   162→Agent: agent-5-e
+   163→Task: Frontend sections — MessagesSection, CrmSection, ProfileSection, AdminSection, AuditSection
+   164→
+   165→Work Log:
+   166→- Created exactly 5 files in src/components/platform/ (no other files touched): MessagesSection.tsx, CrmSection.tsx, ProfileSection.tsx, AdminSection.tsx, AuditSection.tsx. Work record: agent-ctx/5-e-agent-5-e.md.
+   167→- Messages: private DM with trust banner, 5s conv polling, 4s active-conv polling, two-pane desktop / list↔chat mobile with back button, olive bubbles mine / white bordered theirs, fmtJalaliTime under each, rose unread badges, Enter-to-send, new-chat user-grid modal → POST /api/conversations, GET /api/messages auto-marks read server-side.
+   168→- CRM: tabs پیش‌صورتحساب/مشتریان وفادار; preorders polled 10s with salesperson status-change toasts (PREPARED/DONE/CANCELLED, +2 pts on done); salesperson new-preorder modal (customer select or new name, product search from /api/products?limit=500, qty steppers, editable price default sellPrice, note, live total); cashier PENDING→prepare (PrimaryButton + 'کنار صندوق' hint) and PREPARED→done (GoldButton 'تسویه/چاپ شد ✓' + Holoo hint); explainer card; customers with debounced search, preference chips split by '،', add/edit modal for SALESPERSON/GM/OM.
+   169→- Profile: hero (88px Avatar, RoleBadges, pz-gold-text points, level=floor(pts/25)+1 with 5-title ladder, gold progress bar), 6-badge grid (10/25/50/100/200/300, earned colored vs grayscale+lock), points history with ±pills + awardedById names, warm banner, mini leaderboard from /api/dashboard staffPoints with medals + self highlight.
+   170→- Admin: tabs users (IT_ADMIN/OM/OWNER gate; table w/ active dot, editor modal: name, 4-digit pin blank=unchanged, ROLES checkboxes, 6 color swatches, Switch active → POST/PATCH /api/users) / settings (8 keys, per-row save PATCH {key,value,userId} + Persian hints, holidayCheckEnabled as Switch) / holidays (Jalali-year grouping, fmtJalali + WEB/MANUAL chips, add via JalaliDateField + title, per-row delete, 'به‌روزرسانی از اینترنت 🌐' → POST /api/holidays/fetch with added-N toast, info card about cheque calendar).
+   171→- Audit: role gate GM/OM/IT/OWNER; /api/audit?limit=200 + ?stats=1; stat cards (actions today computed, top actor, entities tracked); user/entity selects + client search; newest-first table in pz-scroll max-h-[65vh] sticky header (TimeAgo+fmtJalaliTime, Avatar+name, action chip color by verb, entity#id, detail line-clamp-2); trust banner 'این گزارش برای شفافیت و یادگیری است، نه سرزنش'.
+   172→- All: 'use client', export default XSection({user}), kit primitives only, olive/gold/cream palette, 44px touch targets, toFaDigits everywhere, max-h+pz-scroll lists, toast via sonner, no new packages.
+   173→
+   174→Stage Summary:
+   175→- 5-e frontend sections complete. bun run lint: 0 errors / 0 warnings in my files (3 pre-existing warnings in Login.tsx, ProductsSection.tsx, kit.tsx — not mine). tsc: clean for my files. Dev server compiles and serves without errors.
+   176→
+   177→---
+   178→Task ID: 5-c
+   179→Agent: agent-5-c
+   180→Task: Frontend sections — Products / Suppliers / Warehouse / Planogram
+   181→
+   182→Work Log:
+   183→- ProductsSection.tsx: server-filtered list (debounced q + category chips + low-stock GhostButton toggle + fa count), 2/3/4-col card grid (ProductImage 56, name/nameFa, pz-barcode barcode, Money sellPrice, StockBadge) with big colored remaining number at card bottom via stockDot (red <50% min / amber <min / green) + tiny 'موجودی'. Manage (GM/PM/OM/IT): edit/add modal with all fields (name, nameFa, barcode, buy/sell/sell2, stock, minStock, category+datalist, unit, supplier/company selects, active checkbox) → POST/PATCH /api/products w/ userId+userName; image tools inside modal: web image search (POST /api/products/image-search, max-h-40 pz-scroll thumbnail grid, click → PATCH /api/products/image; empty/error → toast.info 'جستجوی وب در دسترس نیست') + device upload (hidden input, canvas downscale 320px JPEG 0.8 → dataUrl); Holoo import wizard (GoldButton): step A file input .xls/.xlsx/.csv → uploadFile('/api/products/parse') → status-chip preview table (new emerald / duplicate amber + duplicateOfId # / invalid rose) + summary badges, step B merge radio 'fill-empty' (default) | 'merge-stock' (sets row.action) → POST /api/products/commit → toast created/merged/skipped in fa digits → refresh. SALESPERSON/CASHIER/MERCHANDISER get read-only info center with friendly hint banner, no manage buttons.
+   184→- SuppliersSection.tsx: fetch suppliers+companies in parallel; supplier cards (kind badge MANUFACTURER olive / DISTRIBUTOR gold / BOTH cream, paymentTerms chip نقدی/چک/مختلط + chequeDays, phone, note, company initial chips, product count) with search; drill-down: supplier → company cards (product count + lowstock count) → products grid (mini cards same style: price, StockBadge, bottom colored remaining); breadcrumbs همه تامین‌کنندگان / {supplier} / {company} with back buttons. Manage: supplier add/edit modal (name, kind select, phone, paymentTerms, chequeDays, note, companies multi-checkbox) POST/PATCH w/ companyIds; company quick-add modal POST /api/companies.
+   185→- WarehouseSection.tsx: 3 tabs (kit Tabs). Requests: cards w/ product name, qty fa badge, requestedBy Avatar (deterministic color palette), status chip (OPEN amber در انتظار آماده‌سازی / PREPARED violet آماده شد / RECEIVED emerald دریافت شد / CANCELLED stone), note, TimeAgo; actions: INVENTORY_SUPERVISOR+OPEN → 'آماده شد' (prepare), MERCHANDISER+PREPARED → 'دریافت کردم' (receive, increments stock server-side), requester+OPEN → DangerButton 'لغو'; new-request modal for all roles: searchable product select (products?limit=500, max-h-48 pz-scroll list) + qty + note → POST. Customer asks: friendly banner, add modal (name+note) → POST (server upserts count), cards w/ big name, ×N بار پرسیده شده badge (rose ≥3), +۱ PrimaryButton → POST same name (server count+1). Lowstock: products?low=1 rows (ProductImage, StockBadge, colored 'stock از حداقل min'), per-row editable qty input (default ceil(minStock)) + GhostButton 'درخواست از انبار' → POST warehouse-requests. All lists max-h + pz-scroll; touch targets ≥44px.
+   186→- PlanogramSection.tsx: fetch planograms+products; list cards (status chip DRAFT amber/PUBLISHED emerald/ARCHIVED stone, assignedTo Avatar w/ color, shelf/slot counts, fmtJalali updatedAt, مشاهده/ویرایش/آرشیو); MERCHANDISER sorting puts PUBLISHED first. View: wooden shelf rows (gradient #E8DCC0→#D9C9A8 rounded) with slot mini-cards (ProductImage 44, truncated name, ×facing chip in gold, tiny stock number) bordered red/amber/green by product stock (stockDot logic), label chip under each shelf, print-friendly (print:shadow-none). Designer modal (wide, GM/PM/OM/IT): name, shelf builder (add shelf w/ label input, per-shelf product search → filtered list, facing stepper chips −/+, remove slot/shelf) → POST or PATCH action:'update' with layout {shelves:[{label,slots:[{productId,facing}]}]}; publish flow (existing): merchandiser select (GET /api/users filtered to active MERCHANDISER) + GoldButton انتشار → PATCH action:'publish' → toast 'برای چیدمان‌دار ارسال شد'; archive → PATCH action:'archive'.
+   187→- bun run lint: 0 errors; removed 1 unused eslint-disable in my file; remaining 2 warnings are pre-existing in Login.tsx / kit.tsx (not mine). tsc --noEmit clean for my 4 files. Only my 4 files created/modified.
+   188→
+   189→Deviations / notes:
+   190→- New warehouse-request button shown to all roles (spec said "for merchandisers"); the lowstock quick-request was already open to everyone, so gating only the modal felt inconsistent. Role-gated actions (prepare/receive/cancel) follow spec exactly.
+   191→- For brand-new products (no id yet) image tools write to local form state and persist via POST on save instead of PATCH /api/products/image (PATCH needs an existing id).
+   192→- SuppliersSection company drill-down reads company products from /api/companies (its select lacks nameFa/barcode), so mini cards show name/price/stock only — consistent with the API shape.
+   193→- Duplicated the small product mini-card locally in SuppliersSection instead of importing from ProductsSection (frontend contract forbids section imports).
+   194→- 'BOTH' supplier kind uses cream/olive-gold tones instead of violet to stay in the olive/gold/cream palette.
+   195→
+   196→Stage Summary:
+   197→- ProductsSection, SuppliersSection, WarehouseSection, PlanogramSection implemented against the agreed API contracts (products CRUD+parse/commit/image-search/image, suppliers, companies, warehouse-requests, customer-requests, planograms, users). Persian-first labels, Jalali dates, sonner toasts, olive/gold/cream palette, responsive grids, max-h+pz-scroll long lists. Lint/tsc clean.
+   198→
+   199→---
+   200→Task ID: 5-d
+   201→Agent: agent-5-d
+   202→Task: Frontend sections — TasksSection, SopsSection, CommunitySection, NotesSection
+   203→
+   204→Work Log:
+   205→- Created exactly 4 files under src/components/platform/ (no other file touched): TasksSection.tsx, SopsSection.tsx, CommunitySection.tsx, NotesSection.tsx. All 'use client', signature `export default function XSection({ user }: { user: PUser })`, kit primitives only, dir="rtl" root, olive/gold/cream palette, sonner toasts, Jalali dates, max-h + pz-scroll lists, ≥44px touch targets.
+   206→- TasksSection: GET /api/tasks (all) + GET /api/users (managers). Tabs: 'mine' (default, assignedToId===user.id && !DONE/CANCELLED), 'all' (GM/OM/IT/OWNER only), 'done' (✨ pride banner + encouraging empties). Card: priority chip (URGENT rose / HIGH amber / MEDIUM olive / LOW gray), StatusBadge task, overdue detection via daysBetweenISO(dueDate.slice(0,10), todayISO())<0 → rose '⏰ گذشته', assignee Avatar (assignedTo ?? createdBy), TimeAgo. Actions: OPEN→'شروع می‌کنم' (start); IN_PROGRESS→'انجام شد ✓' (done, toast 'آفرین! +۳/+۵ امتیاز 🎉' per priority) + 'توقف موقت' (modal reason → pause); PAUSED → pauseReason amber box + 'ادامه' (reopen→start chain, since API start only accepts OPEN) + 'انجام شد ✓'. Managers: '+ تسک جدید' modal (title/description/priority/assignee/JalaliDateField due) → POST; same modal pre-filled for edit (PATCH action edit); two-step 'لغو تسک → مطمئنی؟' cancel.
+   207→- SopsSection: GET /api/sops (steps already parsed to array by API). Tab 'دستورالعمل‌ها' + 'راهنما | FAQ'. Department filter chips: 'همه' + GENERAL/WAREHOUSE/CASHIER/MERCHANDISING/SALES + any extra dept found in data, each with count. Cards → wide viewer modal: big numbered steps (toFaDigits), per-step 'انجام دادم' toggle (Set<number>), progress bar gradient olive→gold with ٪, at 100% celebration box '🎉 آفرین! همه مراحل انجام شد' + hint 'اگر مشکلی پیش آمد، از دکمه توقف در تسک‌ها استفاده کن یا به سرپرست بگو' + 'مرور دوباره از اول'. Managers (GM/OM/IT): create/edit modal (title, dept select, per-step textarea rows + add/remove) → POST/PATCH; two-step delete → DELETE /api/sops?id=&userId=. HELP tab: native details/summary accordion with 5 friendly Persian FAQ answers referencing platform sections (سفارش‌ها، محصولات، امتیازها، ایده‌ها، انبار).
+   208→- CommunitySection: Tabs 'دیوار تیمی' | 'ایده‌ها' | 'بازخورد ناشناس' (+ 'صندوق بازخورد' for GM/OM/OWNER/IT). WALL: composer (Avatar+textarea+'انتشار') → POST /api/wall; list pinned-first (server sort) with 📌 badge; managers see pin/unpin → PATCH {id,pinned}. IDEAS: submit card → POST /api/ideas → toast 'ایده‌ات ثبت شد! اگر پیاده شود جایزه دارد 🌟'; list with IDEA_STATUS_LABELS chips (SUBMITTED gray / REVIEWING amber / ACCEPTED emerald / IMPLEMENTED gold / REJECTED rose), 💬 decision box, TimeAgo; GM/OM/IT get status select + decision input + 'ثبت تصمیم' → PATCH {id,status,decision,decidedById}. FEEDBACK: 5-star gold buttons (44px) + textarea → POST /api/feedback → toast 'نظر ناشناس شما ثبت شد — ممنون که کمک می‌کنی بهتر شویم 💚'; privacy note 'نام شما ذخیره نمی‌شود'; manager inbox lists rating stars + content + TimeAgo (fetched only for managers).
+   209→- NotesSection: GET /api/notes?userId=; sticky grid 2 cols mobile / 3 md / 4 xl; colors olive #F3F7EF, gold #FBF3DC, rose #FBEAEA, sky #EAF3F7 (mapped bg/border classes); big dashed '+ یادداشت جدید' card + header action; modal with title/content/4-dot color picker → POST/PATCH; two-step delete confirm (🗑️ → 'حذف؟'); privacy banner '🔒 این یادداشت‌ها فقط برای خودت است'; TimeAgo(updatedAt); no audit per API design.
+   210→- Philosophy applied throughout: warm copy ('این چک‌لیست برای اطمینان توست', 'نگران نباش', 'عجله‌ای نیست'), celebratory toasts, encouraging empty states, zero threatening language.
+   211→
+   212→Verification:
+   213→- bun run lint → 0 errors (2 pre-existing warnings in Login.tsx / kit.tsx — not my files).
+   214→- bunx tsc --noEmit → 0 errors in my 4 files (remaining project errors are other agents' missing sections/examples).
+   215→
+   216→Deviations / notes:
+   217→- PAUSED tasks also show 'انجام شد ✓' (spec listed it only for IN_PROGRESS) so a paused task can be completed without resuming first — staff-friendly.
+   218→- 'ادامه' on PAUSED runs reopen→start in sequence because the tasks API only allows 'start' from OPEN.
+   219→- SOP delete confirm uses two-step inline button instead of window.confirm (consistent with tasks/notes pattern).
+   220→- Set dir="rtl" on each section root (shell does not set RTL; idempotent if shell adds it later).
+   221→- Tailwind v4 trailing important syntax (px-2.5!) used for compact card buttons.
+   222→
+   223→Stage Summary:
+   224→- Tasks / SOPs / Community / Notes sections complete per contract, lint+tsc clean, ready to be wired by page.tsx shell.
+   225→
+   226→---
+   227→Task ID: 5-b
+   228→Agent: agent-5-b
+   229→Task: Frontend sections — DeliveriesSection, AccountingSection, PaymentsSection
+   230→
+   231→Work Log:
+   232→- DeliveriesSection.tsx: role-driven tabs (receive for DELIVERY_RECEIVER+INVENTORY_SUPERVISOR, confirm for INVENTORY_SUPERVISOR, overview+history for GM/OM/ACCOUNTANT/PM; default confirm>receive>overview). Fetches /api/orders?status=APPROVED|RECEIVED|CONFIRMED|DONE + /api/holidays (holiday banner "امروز تعطیل است"). Overview: stat cards + active order cards, overdue (receivingDate<today && APPROVED) red alert "سفارش معوق — به تامین‌کننده پیگیری شود" + ghost openOrder. Receive/Confirm share one Modal-wide sheet (fetches GET /api/orders/[id] for full items+product image): ProductImage+name+mono barcode+ordered qty, 44px qty stepper (−/input/+), printedPrice (receive, default unitCost, hint "قیمت چاپ‌شده روی بسته") or finalCost (confirm, default printedPrice/unitCost), 3 big OK/MISSING/REJECTED toggles (emerald/amber/rose), note appears on MISSING/REJECTED, top auto-focus scan input (Enter → find by item/product barcode → status OK + full qty + toast "تایید شد ✓"), per-row "افزودن بارکد" inline input → PATCH addBarcode. Footer recalc: Σ(printedPrice??unitCost)×deliveredQty (confirm: confirmedQty+finalCost), VAT 9%, total, delta chip vs order.total (≤1000 green "اختلاف جزئی قابل قبول" else amber). Submit PATCH action 'receive'/'confirm' {userId, items:[{id, deliveredQty|confirmedQty, printedPrice, finalCost, status, note}]} → toast + refresh. History: DONE table (code/supplier/total/doneAt fmtJalaliTime/openOrder).
+   233→- AccountingSection.tsx: stats from /api/dashboard (CONFIRMED count via ordersByStatus, chequesPendingOwner) + /api/orders?status=DONE (current Jalali-month done sum). Queue tab: CONFIRMED cards → GoldButton "خروجی Excel برای Holoo" → downloadFile(/api/export/order/[id]?userId=, code-holoo.xls) + PrimaryButton "ثبت شد در هولو / Mark Done" → confirm modal (reminds to import into Holoo first) → PATCH action 'done' → toast "سفارش بسته شد +۵ امتیاز"; GM/OM read-only (no Mark Done, badge). History: DONE table + re-export. Insights (recharts): monthly spend AreaChart grouped client-side by Jalali month (JALALI_MONTHS labels), supplier PieChart (olive/gold palette), VAT-collected stat. "راهنمای پل Holoo" card: 5 numbered Persian steps, friendly note for خانم درویشی.
+   234→- PaymentsSection.tsx: fetches /api/cheques, /api/holidays, /api/orders?status=DONE+CONFIRMED, /api/users (created-by names). JalaliCalendar card (anchor=selected month, highlight dueDate→'💰 سررسید چک', legend below, month cheque list sorted by due). StatCards: due-this-month (non-terminal), awaiting owner approval, collected this month. "چک جدید" (GM) modal: ORDER/OTHER toggle, order select (DONE+CONFIRMED, autofills amount), amount, JalaliDateField (minDate today) with holiday logic — amber "⚠ این روز تعطیل است: {title} — چک باید قبل از تعطیلات سررسید شود" + 1–3-days-earlier GhostButton chips (holiday-filtered), submit disabled on holiday; recipientName/Phone, payee, note → POST /api/cheques. Cheques grouped into 6 collapsible sections (pending/approved/written+signed/given/collected+done/rejected+bounced); cards: big amount, fmtJalaliLong due (rose if holiday), StatusBadge kind='cheque', linked order chip → openOrder, recipient/payee/created-by. Actions per role×status: OWNER → approve (large gold-ringed card, "در انتظار تایید شما، آقای نوروزی")/reject (reason modal)/write/sign; GM → give/collect/bounce (PATCH actions approve|reject{reason}|write|sign|give|collect|bounce — verified against cheques API). Rose banner when SIGNED && signedAt>3d ("چک نوشته شده ولی جمع نشده — پیگیری کنید").
+   235→- Reused kit primitives only; olive/gold/cream palette; ≥44px touch targets; all dates via fmtJalali*; long lists max-h + pz-scroll; toast (sonner) on all mutations; no files outside my three touched; no new packages.
+   236→
+   237→Deviations / notes:
+   238→- Receiving sheet fetches order detail via GET /api/orders/[id] because the orders LIST endpoint returns items subset (qty/deliveredQty/confirmedQty/unitCost only) without name/barcode/printedPrice — detail endpoint supplies full items + product imageUrl.
+   239→- Default tab precedence for a user holding both roles: INVENTORY_SUPERVISOR → 'confirm' (also keeps receive tab), else DELIVERY_RECEIVER → 'receive', else 'overview'.
+   240→- Delta chip compares recalc total vs order.total per spec; since original total excludes VAT, chip hints the comparison base to avoid confusion.
+   241→- GM also sees approve rights in the API, but per spec only OWNER gets approve/reject/write/sign buttons; GM gets give/collect/bounce.
+   242→- New-cheque submit is client-disabled on holiday dates (server also returns 400 — both layers covered).
+   243→- History uses DONE only (CANCELLED excluded per instruction).
+   244→
+   245→Stage Summary:
+   246→- 5-b complete: deliveries receive/confirm/overview/history, accounting queue/history/insights + Holoo guide, payments calendar/new-cheque/grouped lifecycle — lint+tsc clean (only pre-existing warnings in Login.tsx/kit.tsx, not mine).
+   247→
+   248→---
+   249→Task ID: 5-a
+   250→Agent: agent-5-a
+   251→Task: Frontend sections — DashboardSection.tsx + OrdersSection.tsx
+   252→
+   253→Work Log:
+   254→- Read all contracts first (worklog.md, kit.tsx, jalali.ts, types.ts, api.ts, store.ts, JalaliCalendar.tsx) and CONFIRMED response shapes from the actual routes: /api/dashboard (counts/ordersPerDay{date,count,total}/spendPerDay/topSuppliers/lowStockItems/recentEvents{orderId,code included→clickable}/staffPoints/holidays), GET /api/orders (list items = {qty,deliveredQty,confirmedQty,unitCost} + _count.items, supplier {id,name,paymentTerms,chequeDays} — NO productId/name in list items), GET/PATCH /api/orders/[id] (PATCH returns fresh full order), POST /api/orders, GET /api/suppliers, GET /api/products?limit=500.
+   255→- src/components/platform/DashboardSection.tsx ('use client', default export, {user}: {user: PUser}): GET /api/dashboard once + 30s polling; role-aware greeting hero ("سلام {firstName} 👋", fmtJalaliLong today, gold points chip, subtitle varies by role via hasRole: GM/OWNER management overview, ACCOUNTANT financial queue, DELIVERY_RECEIVER/INVENTORY_SUPERVISOR today's deliveries, PM/OM/IT variants); 6 StatCards in 2-col mobile/4-col desktop grid (ShoppingCart→orders, Truck→deliveries, Package→products rose if >5, CreditCard→payments gold, CheckSquare→tasks, Users→crm), all clickable via setView; recharts BarChart ordersPerDay (fill #5F8F55, radius [6,6,0,0]) + AreaChart spendPerDay (stroke #B8860B, gradient fill, Y fmtMoneyShort) in ResponsiveContainer h-64 cards; Top suppliers donut PieChart (colors ['#3E6B4A','#93C572','#B8860B','#DAA520','#7A5C2E'], innerRadius 52, Legend) + staff leaderboard top-5 (🥇🥈🥉 medals, Avatar, gold #1 highlight) with max-h-72 pz-scroll; bottom row: low-stock list (StockBadge + stock/minStock colored via stockDot, rows → setView('products')), recent activity feed (userName + action label + detail + TimeAgo, order code pz-barcode chip → openOrder(orderId) when payload has orderId — it does), upcoming holidays (fmtJalali, rose Heart). SectionHeader icon LayoutDashboard; olive/gold/cream only; ≥44px targets; Persian + English labels.
+   256→- src/components/platform/OrdersSection.tsx: modes list/detail/new in one component.
+   257→  LIST: SectionHeader + PrimaryButton "سفارش جدید" gated by hasRole GM/PM/OM/IT; Tabs [All active(→?active=1), DRAFT, SUBMITTED, APPROVED, RECEIVED, CONFIRMED, DONE] via ORDER_STATUS_LABELS; order cards grid (md:2/xl:3) with pz-barcode code, supplier, StatusBadge, payment badge, receiving date fmtJalali + red "معوق | Overdue" when APPROVED & date<today, item count, fmtMoney total, delivered/confirmed progress bar (from list items qty/deliveredQty/confirmedQty), TimeAgo.
+   258→  DETAIL: fetches /api/orders/[id]; back button; header (code/supplier/StatusBadge/payment); PATCH-action helper reuses the fresh order returned by API; vertical timeline (dots, action labels, userName, detail, fmtJalaliTime); items TableWrap with pz-barcode barcodes, qty, delivered/confirmed columns rendered only when present, unitCost/sellPrice/line total ((finalCost??unitCost)*(confirmedQty??deliveredQty??qty)), per-item status chip OK/MISSING/REJECTED/PENDING; totals panel subtotal/VAT(٪ computed, 9 fallback)/discount/total Money; amber correction box when order.correction; role-aware actions: DRAFT/SUBMITTED+creator|GM/PM/OM/IT → edit (opens wizard prefilled)/submit/cancel(confirm); SUBMITTED+GM → approve/reject(window.prompt reason)/cancel; APPROVED/RECEIVED/CONFIRMED+GM/PM/OM → اصلاحیه modal → PATCH action 'correct'; CONFIRMED+ACCOUNTANT → GoldButton downloadFile(`/api/export/order/${id}?userId=`, `${code}.xls`) + 'ثبت نهایی/بستن سفارش' → PATCH 'done'; RECEIVED+INVENTORY_SUPERVISOR → setView('deliveries').
+   259→  WIZARD (new + edit DRAFT/SUBMITTED): full-screen fixed inset-0 z-50 bg-[#FBF9F3] with sticky gradient header, 1→2→3 step indicator (clickable back on desktop + mobile dots) and sticky footer; fetches /api/suppliers + /api/products?limit=500 once; STEP1 supplier search + cards (kind badge, paymentTerms badge, chequeDays 'چک ۴۵ روزه', phone toFaDigits, company chips, product count) with selected highlight; STEP2 product search, that supplier's products first + "سایر تأمین‌کننده‌ها" divider section, cards with ProductImage, name+nameFa, pz-barcode, sellPrice, remaining count colored via stockDot, big 44px +/− steppers with qty badge, Clock GhostButton → history Modal: fetches /api/orders?active=1 per open; since LIST items lack productId (verified in route) it falls back per contract to that product's supplier's past orders (code/date/item-count/StatusBadge rows, "سابقه‌ای نیست" empty state); STEP3 JalaliDateField (default tomorrow addDaysISO(todayISO(),1), minDate today), payment pills CASH/CHEQUE/MIXED defaulting from supplier.paymentTerms (validPayment), note textarea, items summary with qty steppers + line totals, subtotal + VAT 9% + total; footer 'ذخیره پیش‌نویس' (GhostButton) + 'ثبت و ارسال برای تایید' (PrimaryButton) → POST /api/orders {supplierId,createdById,receivingDate,paymentType,note,status,items[{productId,name,barcode,qty,unitCost,sellPrice}]} or PATCH {action:'update', items(with existing ids),note,receivingDate,paymentType,userId} + auto 'submit' when a DRAFT edit is submitted; sonner toasts on success/error; sonner <Toaster> rendered (layout only mounts the radix Toaster, so sonner toasts need it).
+   260→- Store wiring: watched newOrderSignal with ref-guard (ignores persisted initial value) → opens wizard; consumed focusOrderId in effect → opens detail then useApp.setState({focusOrderId:null}) to clear; back from detail refreshes the list.
+   261→- Verification: bun run lint → 0 errors (2 pre-existing warnings in Login.tsx/kit.tsx — other files, untouched); bunx tsc --noEmit → no errors in my two files (fixed one TS5076 ??/|| mixing in my file; remaining tsc errors are in examples/, skills/, Header.tsx — other agents' files). No files outside my two + worklog touched; no new packages; no test code.
+   262→
+   263→Deviations / notes:
+   264→- Product-history modal uses the supplier's-orders fallback (contract-sanctioned) because GET /api/orders list items don't include productId; switching to a per-order detail scan was ruled out as N+1 fetches.
+   265→- Correction button also enabled for RECEIVED/CONFIRMED (GM/PM/OM) — the API's 'correct' action explicitly allows APPROVED/RECEIVED/CONFIRMED; spec only named APPROVED.
+   266→- Edit button additionally shown for SUBMITTED orders (creator or managers) since PATCH 'update' allows DRAFT+SUBMITTED; submit button only for DRAFT.
+   267→- VAT percent label on detail is computed from order.vat/subtotal with 9% fallback (API stores vatPercent from Settings).
+   268→- Wizard keeps existing OrderItem ids on edit so PATCH 'update' updates rather than delete+recreate rows.
+   269→- Cancel allowed for DRAFT/SUBMITTED/APPROVED by creator-or-managers (API blocks only DONE/CANCELLED).
+   270→
+   271→Stage Summary:
+   272→- Task 5-a complete: DashboardSection + OrdersSection implemented per contract against the live API shapes, lint+tsc clean for my files, ready for page.tsx shell integration (sections take {user} prop only).
+   273→
+   274→---
+   275→Task ID: 6 + 7
+   276→Agent: main (integration & verification)
+   277→Task: Integrate all sections, lint/typecheck, run dev server, E2E verify golden paths via agent-browser
+   278→
+   279→Work Log:
+   280→- Fixed Header.tsx type error (PUser prop) — project tsc-clean for app code; bun run lint: 0 errors 0 warnings (auto-fixed 2 unused-directive warnings).
+   281→- Started dev server (port 3000) — GET / 200, no runtime errors in dev.log.
+   282→- E2E verified via agent-browser:
+   283→  * Login screen renders (paisley design); staff grid + PIN pad works (fixed login response-shape bug: API returns user directly, Login.tsx now handles both wrapped/bare shapes).
+   284→  * Mrs. Lotfi (GM, PIN 2222): dashboard renders fully (stat cards, recharts bar/area/donut, leaderboard, low-stock, activity, holidays). Fixed empty-holidays by adding 1405–1406 holidays (2026-11-04 .. 2027-06-24) since sandbox clock = Sep 2026.
+   285→  * Quick "سفارش جدید" header button + wizard: supplier cards w/ companies/terms → product cards w/ colored remaining counts + qty steppers + history button → review w/ Jalali date (default tomorrow), payment pills, VAT — saved HZ-1008 DRAFT via UI; submitted + GM-approved via UI (DRAFT→SUBMITTED→APPROVED verified via API).
+   286→  * Mr. Mohammadi (inv, PIN 5555): role-gated nav correct; Deliveries confirm sheet (barcode scan field, qty/finalCost, OK/MISSING/REJECTED) → HZ-1004 → CONFIRMED via UI.
+   287→  * Mrs. Darvishi (accountant, PIN 4444): Accounting queue shows CONFIRMED orders; XLS export verified via curl (HTTP 200, CDFV2 Excel, 4608 bytes for HZ-1003 id=15); Mark Done via 2-step Holoo reminder modal → HZ-1003 DONE.
+   288→  * Cheque flow (GM): New Cheque modal → picked ۱۳ آبان ۱۴۰۵ → holiday warning + earlier-date suggestion chips shown; applied "۱ روز قبل" → ۱۲ آبان; order select auto-filled amount; submitted → appears in "در انتظار تایید مالک".
+   289→  * Owner (Javad Norouzi, PIN 1111): Payments shows "مناسب تایید آقای نوروزی" section w/ big approve/reject; approved cheque → APPROVED verified.
+   290→  * Tasks, Messages (privacy banner), Community wall (composer, pinned), Products (info-center banner + category chips + stock badges), Profile (level جوانه, progress, leaderboard), Suppliers (kind/terms/company chips), Warehouse (request cards + tabs) all render and are interactive.
+   291→- Note: user IDs are 49-64 after re-seeds (autoincrement) — seed pins unchanged (owner 1111, GM 2222, IT/OM 1010, PM 3333, accountant 4444, inventory 5555, Irannejhad 6666).
+   292→
+   293→Stage Summary:
+   294→- Platform is fully working end-to-end: order lifecycle (Draft→Submit→Approve→Receive→Confirm→Export→Done), cheque pipeline w/ Jalali calendar + holiday guard + owner approval, tasks/SOPs/community/notes/messages/CRM/planogram/warehouse/products-import/audit/admin all implemented.
+   295→- All 18 sections + shell + 33 API routes lint-clean, tsc-clean, browser-verified.
+   296→
+   297→---
+   298→Task ID: cron-review-20260911 (round 2)
+   299→Agent: webDevReview (main)
+   300→Task: Status assessment, QA via agent-browser, bug fixes + new features (Reports, Briefing, Print PO)
+   301→
+   302→Work Log:
+   303→- STATUS ASSESSMENT: platform stable — server 200, lint/tsc clean, worklog reviewed. Previous golden paths intact.
+   304→- QA PASS (agent-browser): fresh session login OK; dashboard fully rendered; found 2 real issues:
+   305→  1) Greeting bidi bug: "Mrs. Lotfi" Latin name rendered as "Mrs. سلام 👋" garbage in RTL hero.
+   306→  2) HTML hydration error: nested <button> inside <button> in dashboard briefing (dev overlay "2 Issues"; console: "In HTML, button cannot be a descendant of button").
+   307→- FIXES:
+   308→  * Greeting now prefers the Persian role-name in parentheses (name.match(/\(([^)]+)\)/)) → "سلام مدیر عامل 👋" with dir="rtl" (fallback to Latin first name). DashboardSection.tsx.
+   309→  * BriefingCard deliveries panel: outer <button> → div(role=button, tabIndex, onKeyDown) so the inner order-code <button> is legal HTML. Console re-checked: hydration error GONE.
+   310→- NEW FEATURE 1 — Reports & Analytics (management + accountant + PM):
+   311→  * GET /api/reports: delivery performance (avg receive/confirm lag hrs, on-time %), supplier scorecard (spend, orders, missing/rejected issue-rate), 6-month DONE-spend buckets, staff activity from audit log + points (30d), product margin analysis mirroring Mrs. Darvishi's Excel logic (green ≥25%, yellow ≥10%, red <10%) with top-12 + at-risk lists, order pipeline funnel, financial snapshot (30d spend, est VAT, open commitments).
+   312→  * ReportsSection.tsx: KPI StatCards, Jalali-labeled monthly spend BarChart, colored funnel bars, scorecard table with issue-rate badges, margin lists (Excel color semantics), staff activity grid. Wired: store ViewKey 'reports', nav item 'گزارش و تحلیل' (MGMT+ACCOUNTANT+PM), Sidebar icon BarChart3, page.tsx switch. Browser-verified end to end.
+   313→- NEW FEATURE 2 — Today Briefing card ("بریفینگ امروز"): gold-gradient dashboard card composing (client-side, no API change): inbound deliveries (code chip → openOrder, supplier, معوق! badge), cheques due within 7d (amount, Jalali due, day-count chip colored), urgent/high/mine tasks (priority dots). Hidden entirely when all empty. Role-agnostic (everyone gets their own view; tasks filtered by assignedToId).
+   314→- NEW FEATURE 3 — Print PO: order detail "چاپ سفارش | Print PO" button → hidden .pz-print-only sheet (brand header, code, supplier, Jalali dates, items table with barcodes/qty/cost/line totals, VAT-aware grand total, note/correction, signature blocks) + @media print CSS (visibility isolation, page-break rules). Browser-verified sheet renders (3 rows incl. totals).
+   315→- Also: fixed pre-existing /api/reports TS error during development (pointsByUser map).
+   316→- Verification: bun run lint 0 errors/0 warnings; tsc clean (app code); agent-browser: dashboard + reports + print sheet verified; console free of hydration/errors.
+   317→
+   318→Stage Summary:
+   319→- 3 new features shipped (Reports & Analytics API+UI, Today Briefing, Print PO) + 2 bugs fixed (RTL greeting, nested-button hydration).
+   320→- No schema changes; no breaking API changes; all prior golden paths still working.
+   321→
+   322→Unresolved / next-round recommendations (priority order):
+   323→1) RTL polish sweep: consider dir="rtl" on the shell root + mirrored sidebar for full Persian-first layout (sections already self-RTL).
+   324→2) Sales-report gap: platform tracks orders, not register sales — when Holoo export includes sales, add /api/reports/sales for SPHL per salesperson.
+   325→3) Notifications: add browser Notification API opt-in for managers (deliveries/cheque events) alongside in-app bell.
+   326→4) Planogram: print/export planogram as image for floor staff.
+   327→5) Consider explicit 'sessions' or JWT if deploying beyond trusted LAN.
+   328→

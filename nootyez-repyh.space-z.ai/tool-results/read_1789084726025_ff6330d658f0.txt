@@ -1,0 +1,716 @@
+     1→     1→'use client'
+     2→     2→import * as React from 'react'
+     3→     3→import { toast } from 'sonner'
+     4→     4→import {
+     5→     5→  AlertTriangle, ClipboardCheck, Eye, History, LayoutGrid, Minus,
+     6→     6→  PackageCheck, Plus, ScanLine, Truck,
+     7→     7→} from 'lucide-react'
+     8→     8→import { api } from '@/lib/api'
+     9→     9→import { useApp } from '@/lib/store'
+    10→    10→import { hasRole, type OrderT, type OrderItemT, type PUser } from '@/lib/types'
+    11→    11→import { fmtJalali, fmtJalaliTime, fmtMoney, toFaDigits, todayISO } from '@/lib/jalali'
+    12→    12→import { cn } from '@/lib/utils'
+    13→    13→import {
+    14→    14→  Badge, Card, EmptyState, Field, GhostButton, inputCls, Loading, Modal, Money,
+    15→    15→  PrimaryButton, ProductImage, SectionHeader, StatCard, StatusBadge, Tabs, TableWrap, Td, Th,
+    16→    16→} from './kit'
+    17→    17→
+    18→    18→/* =============== local types =============== */
+    19→    19→
+    20→    20→type ItemStatus = 'OK' | 'MISSING' | 'REJECTED'
+    21→    21→type SheetMode = 'receive' | 'confirm'
+    22→    22→
+    23→    23→interface ListOrder {
+    24→    24→  id: number
+    25→    25→  code: string
+    26→    26→  status: string
+    27→    27→  receivingDate: string
+    28→    28→  subtotal: number
+    29→    29→  vat: number
+    30→    30→  total: number
+    31→    31→  createdAt: string
+    32→    32→  doneAt: string | null
+    33→    33→  supplier?: { id: number; name: string; paymentTerms?: string; chequeDays?: number } | null
+    34→    34→  _count?: { items: number }
+    35→    35→}
+    36→    36→
+    37→    37→interface DetailItem extends OrderItemT {
+    38→    38→  product?: { id: number; name: string; barcode: string | null; imageUrl: string | null } | null
+    39→    39→}
+    40→    40→interface DetailOrder extends OrderT {
+    41→    41→  items: DetailItem[]
+    42→    42→}
+    43→    43→
+    44→    44→interface RowState {
+    45→    45→  qty: number // deliveredQty (receive) / confirmedQty (confirm)
+    46→    46→  printed: string
+    47→    47→  final: string
+    48→    48→  status: ItemStatus
+    49→    49→  note: string
+    50→    50→}
+    51→    51→
+    52→    52→const VAT_RATE = 0.09
+    53→    53→const DELTA_TOLERANCE = 1000 // تومان
+    54→    54→
+    55→    55→/* =============== helpers =============== */
+    56→    56→
+    57→    57→/** numeric input → number | null (accepts Persian digits too) */
+    58→    58→function num(v: string): number | null {
+    59→    59→  const t = String(v).trim().replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+    60→    60→  if (!t) return null
+    61→    61→  const n = Number(t)
+    62→    62→  return isFinite(n) ? n : null
+    63→    63→}
+    64→    64→
+    65→    65→const round1 = (n: number) => Math.round(n * 100) / 100
+    66→    66→
+    67→    67→function initRows(mode: SheetMode, order: DetailOrder): Record<number, RowState> {
+    68→    68→  const rec: Record<number, RowState> = {}
+    69→    69→  for (const it of order.items) {
+    70→    70→    rec[it.id] = {
+    71→    71→      qty: mode === 'receive'
+    72→    72→        ? (it.deliveredQty ?? it.qty)
+    73→    73→        : (it.confirmedQty ?? it.deliveredQty ?? it.qty),
+    74→    74→      printed: String(it.printedPrice ?? it.unitCost ?? 0),
+    75→    75→      final: String(it.finalCost ?? it.printedPrice ?? it.unitCost ?? 0),
+    76→    76→      status: it.status === 'MISSING' || it.status === 'REJECTED' ? it.status : 'OK',
+    77→    77→      note: it.note ?? '',
+    78→    78→    }
+    79→    79→  }
+    80→    80→  return rec
+    81→    81→}
+    82→    82→
+    83→    83→const STATUS_OPTS: { v: ItemStatus; label: string; activeCls: string; idleCls: string }[] = [
+    84→    84→  { v: 'OK', label: 'سالم', activeCls: 'bg-emerald-500 border-emerald-600 text-white shadow-md', idleCls: 'border-emerald-200 bg-white text-emerald-700' },
+    85→    85→  { v: 'MISSING', label: 'ناقص', activeCls: 'bg-amber-500 border-amber-600 text-white shadow-md', idleCls: 'border-amber-200 bg-white text-amber-700' },
+    86→    86→  { v: 'REJECTED', label: 'مردود', activeCls: 'bg-rose-500 border-rose-600 text-white shadow-md', idleCls: 'border-rose-200 bg-white text-rose-700' },
+    87→    87→]
+    88→    88→
+    89→    89→/* =============== qty stepper (44px touch targets) =============== */
+    90→    90→
+    91→    91→function QtyStepper({ label, value, onChange }: { label: string; value: number; onChange: (n: number) => void }) {
+    92→    92→  return (
+    93→    93→    <div className="min-w-0">
+    94→    94→      <span className="mb-1 block text-xs font-semibold text-[#4A5A44]">{label}</span>
+    95→    95→      <div className="flex items-center gap-1.5">
+    96→    96→        <button
+    97→    97→          type="button" aria-label="کاهش تعداد"
+    98→    98→          onClick={() => onChange(Math.max(0, round1(value - 1)))}
+    99→    99→          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#D8D2BC] bg-white text-[#4A5A44] transition hover:bg-[#F3F7EF] active:scale-95"
+   100→   100→        >
+   101→   101→          <Minus size={16} />
+   102→   102→        </button>
+   103→   103→        <input
+   104→   104→          type="number" inputMode="decimal" min={0} step="any" aria-label={label}
+   105→   105→          value={String(value)}
+   106→   106→          onChange={(e) => { const n = Number(e.target.value); onChange(isFinite(n) && n >= 0 ? round1(n) : 0) }}
+   107→   107→          className="h-11 w-full min-w-0 rounded-xl border border-[#D8D2BC] bg-white text-center text-sm font-bold tabular-nums text-[#253A2A] outline-none focus:border-[#5F8F55] focus:ring-2 focus:ring-[#93C572]/30"
+   108→   108→        />
+   109→   109→        <button
+   110→   110→          type="button" aria-label="افزایش تعداد"
+   111→   111→          onClick={() => onChange(round1(value + 1))}
+   112→   112→          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#D8D2BC] bg-white text-[#4A5A44] transition hover:bg-[#F3F7EF] active:scale-95"
+   113→   113→        >
+   114→   114→          <Plus size={16} />
+   115→   115→        </button>
+   116→   116→      </div>
+   117→   117→    </div>
+   118→   118→  )
+   119→   119→}
+   120→   120→
+   121→   121→/* =============== receive / confirm sheet =============== */
+   122→   122→
+   123→   123→function DeliverySheet({ orderId, mode, user, onClose, onDone }: {
+   124→   124→  orderId: number | null
+   125→   125→  mode: SheetMode
+   126→   126→  user: PUser
+   127→   127→  onClose: () => void
+   128→   128→  onDone: () => void
+   129→   129→}) {
+   130→   130→  const [order, setOrder] = React.useState<DetailOrder | null>(null)
+   131→   131→  const [loading, setLoading] = React.useState(false)
+   132→   132→  const [rows, setRows] = React.useState<Record<number, RowState>>({})
+   133→   133→  const [scan, setScan] = React.useState('')
+   134→   134→  const [saving, setSaving] = React.useState(false)
+   135→   135→  const [barcodeFor, setBarcodeFor] = React.useState<number | null>(null)
+   136→   136→  const [barcodeVal, setBarcodeVal] = React.useState('')
+   137→   137→
+   138→   138→  React.useEffect(() => {
+   139→   139→    if (orderId == null) { setOrder(null); return }
+   140→   140→    let alive = true
+   141→   141→    setLoading(true)
+   142→   142→    setOrder(null)
+   143→   143→    setScan(''); setBarcodeFor(null); setBarcodeVal('')
+   144→   144→    api.get<DetailOrder>(`/api/orders/${orderId}`)
+   145→   145→      .then((o) => { if (!alive) return; setOrder(o); setRows(initRows(mode, o)) })
+   146→   146→      .catch(() => { if (!alive) return; toast.error('خطا در بارگذاری سفارش'); onClose() })
+   147→   147→      .finally(() => { if (alive) setLoading(false) })
+   148→   148→    return () => { alive = false }
+   149→   149→  }, [orderId, mode, onClose])
+   150→   150→
+   151→   151→  const upd = (id: number, patch: Partial<RowState>) =>
+   152→   152→    setRows((r) => (r[id] ? { ...r, [id]: { ...r[id], ...patch } } : r))
+   153→   153→
+   154→   154→  /* ---- barcode scan: mark item OK with full qty ---- */
+   155→   155→  const handleScan = () => {
+   156→   156→    const code = scan.trim()
+   157→   157→    if (!code || !order) return
+   158→   158→    const it = order.items.find((i) => (i.barcode ?? '') === code || (i.product?.barcode ?? '') === code)
+   159→   159→    if (!it) { toast.error('قلمی با این بارکد در سفارش یافت نشد'); return }
+   160→   160→    const q = mode === 'receive' ? it.qty : (it.deliveredQty ?? it.qty)
+   161→   161→    upd(it.id, { status: 'OK', qty: q, note: '' })
+   162→   162→    toast.success(`تایید شد ✓ — ${it.name}`)
+   163→   163→    setScan('')
+   164→   164→  }
+   165→   165→
+   166→   166→  /* ---- add barcode to an item (product) ---- */
+   167→   167→  const saveBarcode = async (itemId: number) => {
+   168→   168→    const barcode = barcodeVal.trim()
+   169→   169→    if (!barcode || orderId == null) return
+   170→   170→    try {
+   171→   171→      await api.patch(`/api/orders/${orderId}`, { action: 'addBarcode', userId: user.id, itemId, barcode })
+   172→   172→      toast.success('بارکد ذخیره شد ✓')
+   173→   173→      setBarcodeVal('')
+   174→   174→      setBarcodeFor(null)
+   175→   175→      setOrder((o) => (o
+   176→   176→        ? { ...o, items: o.items.map((i) => (i.id === itemId && !i.barcode ? { ...i, barcode } : i)) }
+   177→   177→        : o))
+   178→   178→    } catch (e) {
+   179→   179→      toast.error(e instanceof Error ? e.message : 'خطا در ذخیره بارکد')
+   180→   180→    }
+   181→   181→  }
+   182→   182→
+   183→   183→  /* ---- recalc footer ---- */
+   184→   184→  const totals = React.useMemo(() => {
+   185→   185→    if (!order) return { subtotal: 0, vat: 0, total: 0 }
+   186→   186→    let subtotal = 0
+   187→   187→    for (const it of order.items) {
+   188→   188→      const row = rows[it.id]
+   189→   189→      if (!row) continue
+   190→   190→      const cost = mode === 'receive'
+   191→   191→        ? (num(row.printed) ?? it.unitCost)
+   192→   192→        : (num(row.final) ?? it.printedPrice ?? it.unitCost)
+   193→   193→      subtotal += cost * row.qty
+   194→   194→    }
+   195→   195→    const vat = subtotal * VAT_RATE
+   196→   196→    return { subtotal, vat, total: subtotal + vat }
+   197→   197→  }, [order, rows, mode])
+   198→   198→
+   199→   199→  const delta = order ? totals.total - order.total : 0
+   200→   200→  const smallDelta = Math.abs(delta) <= DELTA_TOLERANCE
+   201→   201→
+   202→   202→  const submit = async () => {
+   203→   203→    if (!order) return
+   204→   204→    setSaving(true)
+   205→   205→    try {
+   206→   206→      const items = order.items.map((it) => {
+   207→   207→        const row = rows[it.id] ?? { qty: 0, printed: '', final: '', status: 'OK' as ItemStatus, note: '' }
+   208→   208→        return mode === 'receive'
+   209→   209→          ? {
+   210→   210→            id: it.id,
+   211→   211→            deliveredQty: row.qty,
+   212→   212→            printedPrice: num(row.printed),
+   213→   213→            status: row.status,
+   214→   214→            note: row.note || null,
+   215→   215→            finalCost: num(row.printed),
+   216→   216→          }
+   217→   217→          : {
+   218→   218→            id: it.id,
+   219→   219→            confirmedQty: row.qty,
+   220→   220→            finalCost: num(row.final),
+   221→   221→            status: row.status,
+   222→   222→            note: row.note || null,
+   223→   223→          }
+   224→   224→      })
+   225→   225→      await api.patch(`/api/orders/${order.id}`, {
+   226→   226→        action: mode === 'receive' ? 'receive' : 'confirm',
+   227→   227→        userId: user.id,
+   228→   228→        items,
+   229→   229→      })
+   230→   230→      toast.success(mode === 'receive' ? 'تحویل سفارش ثبت شد ✓' : 'تایید نهایی انبار ثبت شد ✓')
+   231→   231→      onDone()
+   232→   232→      onClose()
+   233→   233→    } catch (e) {
+   234→   234→      toast.error(e instanceof Error ? e.message : 'خطا در ثبت')
+   235→   235→    } finally {
+   236→   236→      setSaving(false)
+   237→   237→    }
+   238→   238→  }
+   239→   239→
+   240→   240→  const isToday = order ? order.receivingDate.slice(0, 10) === todayISO() : false
+   241→   241→
+   242→   242→  return (
+   243→   243→    <Modal
+   244→   244→      open={orderId != null}
+   245→   245→      onClose={onClose}
+   246→   246→      wide
+   247→   247→      title={mode === 'receive' ? 'دریافت تحویل سفارش' : 'تایید نهایی انبار'}
+   248→   248→    >
+   249→   249→      {loading || !order ? (
+   250→   250→        <Loading label="در حال بارگذاری اقلام سفارش…" />
+   251→   251→      ) : (
+   252→   252→        <div className="space-y-4">
+   253→   253→          {/* ---- header ---- */}
+   254→   254→          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[#E4DCC8] bg-white p-4">
+   255→   255→            <div>
+   256→   256→              <div className="flex items-center gap-2">
+   257→   257→                <span className="text-lg font-extrabold text-[#253A2A]">{order.code}</span>
+   258→   258→                <StatusBadge status={order.status} />
+   259→   259→              </div>
+   260→   260→              <div className="mt-0.5 text-sm text-[#6B7A66]">تامین‌کننده: <b className="text-[#3E6B4A]">{order.supplier?.name ?? '—'}</b></div>
+   261→   261→            </div>
+   262→   262→            <div className="text-left">
+   263→   263→              <Badge className={isToday ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-[#E4DCC8] bg-[#F5F2E8] text-[#4A5A44]'}>
+   264→   264→                {isToday ? 'تحویل صبح امروز' : `تحویل: ${fmtJalali(order.receivingDate)}`}
+   265→   265→              </Badge>
+   266→   266→              <div className="mt-1 text-xs text-[#8A9884]">
+   267→   267→                جمع اصلی سفارش: <b className="tabular-nums">{fmtMoney(order.total)}</b> · {toFaDigits(order.items.length)} قلم
+   268→   268→              </div>
+   269→   269→            </div>
+   270→   270→          </div>
+   271→   271→
+   272→   272→          {/* ---- scan box ---- */}
+   273→   273→          <div className="flex items-center gap-2 rounded-xl border border-[#93C572]/50 bg-[#F3F7EF] px-3 py-1.5">
+   274→   274→            <ScanLine size={18} className="shrink-0 text-[#3E6B4A]" />
+   275→   275→            <input
+   276→   276→              autoFocus
+   277→   277→              value={scan}
+   278→   278→              onChange={(e) => setScan(e.target.value)}
+   279→   279→              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleScan() } }}
+   280→   280→              placeholder="بارکد را اسکن کنید و Enter بزنید…"
+   281→   281→              dir="ltr"
+   282→   282→              className="h-11 w-full bg-transparent text-sm text-[#253A2A] outline-none placeholder:text-[#A8A28C]"
+   283→   283→              aria-label="اسکن بارکد"
+   284→   284→            />
+   285→   285→          </div>
+   286→   286→
+   287→   287→          {/* ---- item cards ---- */}
+   288→   288→          <div className="max-h-[46vh] space-y-3 overflow-y-auto pl-1 pz-scroll">
+   289→   289→            {order.items.map((it) => {
+   290→   290→              const row = rows[it.id]
+   291→   291→              if (!row) return null
+   292→   292→              const cost = mode === 'receive'
+   293→   293→                ? (num(row.printed) ?? it.unitCost)
+   294→   294→                : (num(row.final) ?? it.printedPrice ?? it.unitCost)
+   295→   295→              const line = cost * row.qty
+   296→   296→              return (
+   297→   297→                <Card key={it.id} className="p-3">
+   298→   298→                  {/* product head */}
+   299→   299→                  <div className="flex items-center gap-3">
+   300→   300→                    <ProductImage src={it.product?.imageUrl} name={it.name} size={48} />
+   301→   301→                    <div className="min-w-0 flex-1">
+   302→   302→                      <div className="truncate text-sm font-bold text-[#253A2A]">{it.name}</div>
+   303→   303→                      <div className="font-mono text-[11px] text-[#8A9884]" dir="ltr">{it.barcode || it.product?.barcode || '—'}</div>
+   304→   304→                      <div className="text-[11px] text-[#6B7A66]">
+   305→   305→                        مقدار سفارش: <b className="tabular-nums">{toFaDigits(it.qty)}</b>
+   306→   306→                        {mode === 'receive' && it.deliveredQty != null && <> · دریافتی قبلی: <b className="tabular-nums">{toFaDigits(it.deliveredQty)}</b></>}
+   307→   307→                      </div>
+   308→   308→                    </div>
+   309→   309→                    <div className="shrink-0 text-left">
+   310→   310→                      <div className="text-[10px] text-[#8A9884]">جمع خط</div>
+   311→   311→                      <div className="text-xs font-bold tabular-nums text-[#3E6B4A]">{fmtMoney(line)}</div>
+   312→   312→                    </div>
+   313→   313→                  </div>
+   314→   314→
+   315→   315→                  {/* qty + price */}
+   316→   316→                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+   317→   317→                    <QtyStepper
+   318→   318→                      label={mode === 'receive' ? 'تعداد دریافتی' : 'تعداد تایید نهایی'}
+   319→   319→                      value={row.qty}
+   320→   320→                      onChange={(n) => upd(it.id, { qty: n })}
+   321→   321→                    />
+   322→   322→                    {mode === 'receive' ? (
+   323→   323→                      <Field label="قیمت چاپ‌شده (تومان)" hint="قیمت چاپ‌شده روی بسته">
+   324→   324→                        <input
+   325→   325→                          type="number" inputMode="decimal" min={0} step="any"
+   326→   326→                          value={row.printed}
+   327→   327→                          onChange={(e) => upd(it.id, { printed: e.target.value })}
+   328→   328→                          className={inputCls}
+   329→   329→                        />
+   330→   330→                      </Field>
+   331→   331→                    ) : (
+   332→   332→                      <Field label="قیمت نهایی واحد (تومان)" hint="پیش‌فرض: قیمت چاپ‌شده / قیمت خرید">
+   333→   333→                        <input
+   334→   334→                          type="number" inputMode="decimal" min={0} step="any"
+   335→   335→                          value={row.final}
+   336→   336→                          onChange={(e) => upd(it.id, { final: e.target.value })}
+   337→   337→                          className={inputCls}
+   338→   338→                        />
+   339→   339→                      </Field>
+   340→   340→                    )}
+   341→   341→                  </div>
+   342→   342→
+   343→   343→                  {/* status toggles */}
+   344→   344→                  <div className="mt-3 grid grid-cols-3 gap-2">
+   345→   345→                    {STATUS_OPTS.map((o) => (
+   346→   346→                      <button
+   347→   347→                        key={o.v} type="button"
+   348→   348→                        onClick={() => upd(it.id, { status: o.v })}
+   349→   349→                        aria-pressed={row.status === o.v}
+   350→   350→                        className={cn(
+   351→   351→                          'min-h-[44px] rounded-xl border-2 px-2 text-sm font-bold transition-all active:scale-[0.98]',
+   352→   352→                          row.status === o.v ? o.activeCls : o.idleCls
+   353→   353→                        )}
+   354→   354→                      >
+   355→   355→                        {o.label}
+   356→   356→                      </button>
+   357→   357→                    ))}
+   358→   358→                  </div>
+   359→   359→
+   360→   360→                  {/* note when MISSING / REJECTED */}
+   361→   361→                  {row.status !== 'OK' && (
+   362→   362→                    <div className="mt-3">
+   363→   363→                      <Field label="توضیح" hint="دلیل ناقص یا مردود بودن را بنویسید">
+   364→   364→                        <input
+   365→   365→                          value={row.note}
+   366→   366→                          onChange={(e) => upd(it.id, { note: e.target.value })}
+   367→   367→                          placeholder="مثلاً: ۲ عدد شکسته بود"
+   368→   368→                          className={inputCls}
+   369→   369→                        />
+   370→   370→                      </Field>
+   371→   371→                    </div>
+   372→   372→                  )}
+   373→   373→
+   374→   374→                  {/* add barcode */}
+   375→   375→                  <div className="mt-3">
+   376→   376→                    {barcodeFor === it.id ? (
+   377→   377→                      <div className="flex flex-col gap-2 sm:flex-row">
+   378→   378→                        <input
+   379→   379→                          autoFocus
+   380→   380→                          value={barcodeVal}
+   381→   381→                          onChange={(e) => setBarcodeVal(e.target.value)}
+   382→   382→                          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveBarcode(it.id) } }}
+   383→   383→                          placeholder="بارکد جدید را اسکن/وارد کنید…"
+   384→   384→                          dir="ltr"
+   385→   385→                          className={cn(inputCls, 'font-mono')}
+   386→   386→                        />
+   387→   387→                        <div className="flex gap-2">
+   388→   388→                          <PrimaryButton type="button" className="min-h-[44px] flex-1" onClick={() => saveBarcode(it.id)}>ذخیره بارکد</PrimaryButton>
+   389→   389→                          <GhostButton type="button" className="min-h-[44px]" onClick={() => { setBarcodeFor(null); setBarcodeVal('') }}>لغو</GhostButton>
+   390→   390→                        </div>
+   391→   391→                      </div>
+   392→   392→                    ) : (
+   393→   393→                      <GhostButton type="button" className="min-h-[44px] w-full sm:w-auto" onClick={() => { setBarcodeFor(it.id); setBarcodeVal('') }}>
+   394→   394→                        افزودن بارکد
+   395→   395→                      </GhostButton>
+   396→   396→                    )}
+   397→   397→                  </div>
+   398→   398→                </Card>
+   399→   399→              )
+   400→   400→            })}
+   401→   401→          </div>
+   402→   402→
+   403→   403→          {/* ---- recalc footer ---- */}
+   404→   404→          <Card className="border-[#EAD9A8] bg-gradient-to-br from-[#FFFDF5] to-[#FBF3DC] p-4">
+   405→   405→            <div className="grid grid-cols-3 gap-2 text-center">
+   406→   406→              <div>
+   407→   407→                <div className="text-[11px] text-[#8A6508]">جمع اقلام</div>
+   408→   408→                <div className="text-sm font-bold tabular-nums text-[#253A2A]">{fmtMoney(totals.subtotal)}</div>
+   409→   409→              </div>
+   410→   410→              <div>
+   411→   411→                <div className="text-[11px] text-[#8A6508]">مالیات بر ارزش افزوده (۹٪)</div>
+   412→   412→                <div className="text-sm font-bold tabular-nums text-[#253A2A]">{fmtMoney(totals.vat)}</div>
+   413→   413→              </div>
+   414→   414→              <div>
+   415→   415→                <div className="text-[11px] text-[#8A6508]">جمع کل</div>
+   416→   416→                <div className="text-sm font-extrabold tabular-nums text-[#3E6B4A]">{fmtMoney(totals.total)}</div>
+   417→   417→              </div>
+   418→   418→            </div>
+   419→   419→            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[#EFE0B8] pt-3">
+   420→   420→              <span
+   421→   421→                className={cn(
+   422→   422→                  'inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs font-bold',
+   423→   423→                  smallDelta ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-300 bg-amber-50 text-amber-800'
+   424→   424→                )}
+   425→   425→              >
+   426→   426→                {smallDelta
+   427→   427→                  ? '✓ اختلاف جزئی قابل قبول'
+   428→   428→                  : `اختلاف با سفارش اصلی: ${delta > 0 ? '+' : '−'}${fmtMoney(Math.abs(delta))}`}
+   429→   429→              </span>
+   430→   430→              <span className="text-[11px] text-[#8A9884]">مبدا مقایسه: جمع ثبت‌شده سفارش ({fmtMoney(order.total)})</span>
+   431→   431→            </div>
+   432→   432→            <PrimaryButton className="mt-3 min-h-[48px] w-full text-base" onClick={submit} disabled={saving}>
+   433→   433→              {saving
+   434→   434→                ? 'در حال ثبت…'
+   435→   435→                : mode === 'receive'
+   436→   436→                  ? 'ثبت دریافت تحویل'
+   437→   437→                  : 'ثبت تایید نهایی انبار'}
+   438→   438→            </PrimaryButton>
+   439→   439→          </Card>
+   440→   440→        </div>
+   441→   441→      )}
+   442→   442→    </Modal>
+   443→   443→  )
+   444→   444→}
+   445→   445→
+   446→   446→/* =============== main section =============== */
+   447→   447→
+   448→   448→export default function DeliveriesSection({ user }: { user: PUser }) {
+   449→   449→  const openOrder = useApp((s) => s.openOrder)
+   450→   450→
+   451→   451→  const hasReceive = hasRole(user, 'DELIVERY_RECEIVER') || hasRole(user, 'INVENTORY_SUPERVISOR')
+   452→   452→  const hasConfirm = hasRole(user, 'INVENTORY_SUPERVISOR')
+   453→   453→  const isManager = hasRole(user, 'GENERAL_MANAGER') || hasRole(user, 'OPERATION_MANAGER')
+   454→   454→    || hasRole(user, 'ACCOUNTANT') || hasRole(user, 'PRODUCT_MANAGER')
+   455→   455→
+   456→   456→  const [tab, setTab] = React.useState<string>(() =>
+   457→   457→    hasConfirm ? 'confirm' : hasRole(user, 'DELIVERY_RECEIVER') ? 'receive' : 'overview')
+   458→   458→
+   459→   459→  const [loading, setLoading] = React.useState(true)
+   460→   460→  const [approved, setApproved] = React.useState<ListOrder[]>([])
+   461→   461→  const [received, setReceived] = React.useState<ListOrder[]>([])
+   462→   462→  const [confirmed, setConfirmed] = React.useState<ListOrder[]>([])
+   463→   463→  const [done, setDone] = React.useState<ListOrder[]>([])
+   464→   464→  const [holidays, setHolidays] = React.useState<Record<string, string>>({})
+   465→   465→  const [sheet, setSheet] = React.useState<{ id: number; mode: SheetMode } | null>(null)
+   466→   466→
+   467→   467→  const load = React.useCallback(async () => {
+   468→   468→    setLoading(true)
+   469→   469→    try {
+   470→   470→      const [a, r, c, d, h] = await Promise.all([
+   471→   471→        api.get<{ orders: ListOrder[] }>('/api/orders?status=APPROVED'),
+   472→   472→        api.get<{ orders: ListOrder[] }>('/api/orders?status=RECEIVED'),
+   473→   473→        api.get<{ orders: ListOrder[] }>('/api/orders?status=CONFIRMED'),
+   474→   474→        api.get<{ orders: ListOrder[] }>('/api/orders?status=DONE'),
+   475→   475→        api.get<{ holidays: { date: string; title: string }[] }>('/api/holidays'),
+   476→   476→      ])
+   477→   477→      setApproved(a.orders)
+   478→   478→      setReceived(r.orders)
+   479→   479→      setConfirmed(c.orders)
+   480→   480→      setDone(d.orders)
+   481→   481→      setHolidays(Object.fromEntries(h.holidays.map((x) => [x.date, x.title])))
+   482→   482→    } catch {
+   483→   483→      toast.error('خطا در بارگذاری داده‌ها')
+   484→   484→    } finally {
+   485→   485→      setLoading(false)
+   486→   486→    }
+   487→   487→  }, [])
+   488→   488→
+   489→   489→  React.useEffect(() => { load() }, [load])
+   490→   490→
+   491→   491→  const closeSheet = React.useCallback(() => setSheet(null), [])
+   492→   492→  const afterSheet = React.useCallback(() => { load() }, [load])
+   493→   493→
+   494→   494→  const today = todayISO()
+   495→   495→  const todayHoliday = holidays[today]
+   496→   496→
+   497→   497→  const tabs = [
+   498→   498→    ...(hasReceive ? [{ key: 'receive', label: 'دریافت تحویل', icon: <PackageCheck size={16} /> }] : []),
+   499→   499→    ...(hasConfirm ? [{ key: 'confirm', label: 'تایید انبار', icon: <ClipboardCheck size={16} /> }] : []),
+   500→   500→    ...(isManager ? [
+   501→   501→      { key: 'overview', label: 'نمای کلی', icon: <LayoutGrid size={16} /> },
+   502→   502→      { key: 'history', label: 'تاریخچه', icon: <History size={16} /> },
+   503→   503→    ] : []),
+   504→   504→  ]
+   505→   505→
+   506→   506→  const active = React.useMemo(
+   507→   507→    () => [...approved, ...received, ...confirmed].sort((a, b) => (a.receivingDate < b.receivingDate ? -1 : 1)),
+   508→   508→    [approved, received, confirmed]
+   509→   509→  )
+   510→   510→  const isOverdue = (o: ListOrder) => o.receivingDate.slice(0, 10) < today && o.status === 'APPROVED'
+   511→   511→
+   512→   512→  const openAction = (o: ListOrder) => {
+   513→   513→    if (o.status === 'APPROVED' && hasReceive) setSheet({ id: o.id, mode: 'receive' })
+   514→   514→    else if (o.status === 'RECEIVED' && hasConfirm) setSheet({ id: o.id, mode: 'confirm' })
+   515→   515→    else openOrder(o.id)
+   516→   516→  }
+   517→   517→
+   518→   518→  return (
+   519→   519→    <div>
+   520→   520→      <SectionHeader
+   521→   521→        title="دریافت و انبار | Deliveries"
+   522→   522→        subtitle="تحویل سفارش‌های تامین‌کننده و تایید نهایی انبار"
+   523→   523→        icon={<Truck size={20} />}
+   524→   524→      />
+   525→   525→
+   526→   526→      {/* holiday banner */}
+   527→   527→      {todayHoliday && (
+   528→   528→        <div className="mb-4 flex items-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+   529→   529→          <AlertTriangle size={18} className="shrink-0" />
+   530→   530→          امروز تعطیل است: {todayHoliday}
+   531→   531→        </div>
+   532→   532→      )}
+   533→   533→
+   534→   534→      {tabs.length > 0 && <Tabs tabs={tabs} active={tab} onChange={setTab} />}
+   535→   535→
+   536→   536→      {loading ? (
+   537→   537→        <Loading />
+   538→   538→      ) : tabs.length === 0 ? (
+   539→   539→        <EmptyState title="دسترسی‌ای برای این بخش ندارید" hint="این بخش برای گیرندگان تحویل، انباردار و مدیران است." />
+   540→   540→      ) : (
+   541→   541→        <>
+   542→   542→          {/* ================= RECEIVE TAB ================= */}
+   543→   543→          {tab === 'receive' && (
+   544→   544→            <div className="space-y-3">
+   545→   545→              {confirmed.length > 0 && (
+   546→   546→                <div className="rounded-2xl border border-[#EAD9A8] bg-[#FFFDF5] px-4 py-3 text-sm font-semibold text-[#8A6508]">
+   547→   547→                  {toFaDigits(confirmed.length)} سفارش تایید نهایی شده و آماده حسابداری است ✓
+   548→   548→                </div>
+   549→   549→              )}
+   550→   550→              {approved.length === 0 ? (
+   551→   551→                <EmptyState icon={<PackageCheck size={40} />} title="سفارشی برای دریافت تحویل نیست" hint="سفارش‌های تاییدشده مدیر اینجا نمایش داده می‌شوند." />
+   552→   552→              ) : (
+   553→   553→                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+   554→   554→                  {[...approved].sort((a, b) => (a.receivingDate < b.receivingDate ? -1 : 1)).map((o) => (
+   555→   555→                    <Card key={o.id} className={cn('p-4', isOverdue(o) && 'border-rose-300 bg-rose-50/50')}>
+   556→   556→                      <div className="flex items-start justify-between gap-2">
+   557→   557→                        <div className="min-w-0">
+   558→   558→                          <div className="text-base font-extrabold text-[#253A2A]">{o.code}</div>
+   559→   559→                          <div className="truncate text-xs text-[#6B7A66]">{o.supplier?.name ?? '—'}</div>
+   560→   560→                        </div>
+   561→   561→                        <StatusBadge status={o.status} />
+   562→   562→                      </div>
+   563→   563→                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#6B7A66]">
+   564→   564→                        <span>تحویل: <b>{fmtJalali(o.receivingDate)}</b></span>
+   565→   565→                        <span>{toFaDigits(o._count?.items ?? 0)} قلم</span>
+   566→   566→                        <Money value={o.total} className="text-xs" />
+   567→   567→                      </div>
+   568→   568→                      {isOverdue(o) && (
+   569→   569→                        <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-bold text-rose-700">
+   570→   570→                          <div className="flex items-center gap-1.5"><AlertTriangle size={14} /> سفارش معوق — به تامین‌کننده پیگیری شود</div>
+   571→   571→                        </div>
+   572→   572→                      )}
+   573→   573→                      <PrimaryButton className="mt-3 min-h-[44px] w-full" onClick={() => setSheet({ id: o.id, mode: 'receive' })}>
+   574→   574→                        دریافت تحویل
+   575→   575→                      </PrimaryButton>
+   576→   576→                    </Card>
+   577→   577→                  ))}
+   578→   578→                </div>
+   579→   579→              )}
+   580→   580→            </div>
+   581→   581→          )}
+   582→   582→
+   583→   583→          {/* ================= CONFIRM TAB ================= */}
+   584→   584→          {tab === 'confirm' && (
+   585→   585→            <div className="space-y-3">
+   586→   586→              {received.length === 0 ? (
+   587→   587→                <EmptyState icon={<ClipboardCheck size={40} />} title="سفارش دریافتی در انتظار تایید نیست" hint="سفارش‌هایی که گیرنده تحویل ثبت کرده اینجا برای تایید نهایی می‌آیند." />
+   588→   588→              ) : (
+   589→   589→                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+   590→   590→                  {received.map((o) => (
+   591→   591→                    <Card key={o.id} className="p-4">
+   592→   592→                      <div className="flex items-start justify-between gap-2">
+   593→   593→                        <div className="min-w-0">
+   594→   594→                          <div className="text-base font-extrabold text-[#253A2A]">{o.code}</div>
+   595→   595→                          <div className="truncate text-xs text-[#6B7A66]">{o.supplier?.name ?? '—'}</div>
+   596→   596→                        </div>
+   597→   597→                        <StatusBadge status={o.status} />
+   598→   598→                      </div>
+   599→   599→                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#6B7A66]">
+   600→   600→                        <span>تحویل: <b>{fmtJalali(o.receivingDate)}</b></span>
+   601→   601→                        <span>{toFaDigits(o._count?.items ?? 0)} قلم</span>
+   602→   602→                        <Money value={o.total} className="text-xs" />
+   603→   603→                      </div>
+   604→   604→                      <PrimaryButton className="mt-3 min-h-[44px] w-full" onClick={() => setSheet({ id: o.id, mode: 'confirm' })}>
+   605→   605→                        تایید نهایی انبار
+   606→   606→                      </PrimaryButton>
+   607→   607→                    </Card>
+   608→   608→                  ))}
+   609→   609→                </div>
+   610→   610→              )}
+   611→   611→            </div>
+   612→   612→          )}
+   613→   613→
+   614→   614→          {/* ================= OVERVIEW TAB ================= */}
+   615→   615→          {tab === 'overview' && (
+   616→   616→            <div className="space-y-4">
+   617→   617→              <div className="grid gap-3 sm:grid-cols-3">
+   618→   618→                <StatCard label="در انتظار دریافت" value={toFaDigits(approved.length)} sub="سفارش تاییدشده" icon={<Truck size={20} />} tone="gold" />
+   619→   619→                <StatCard label="دریافت‌شده" value={toFaDigits(received.length)} sub="منتظر تایید انبار" icon={<PackageCheck size={20} />} tone="olive" />
+   620→   620→                <StatCard label="آماده حسابداری" value={toFaDigits(confirmed.length)} sub="تایید نهایی شده" icon={<ClipboardCheck size={20} />} tone="sky" />
+   621→   621→              </div>
+   622→   622→              {active.length === 0 ? (
+   623→   623→                <EmptyState icon={<LayoutGrid size={40} />} title="سفارش فعالی وجود ندارد" />
+   624→   624→              ) : (
+   625→   625→                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+   626→   626→                  {active.map((o) => {
+   627→   627→                    const overdue = isOverdue(o)
+   628→   628→                    return (
+   629→   629→                      <Card key={o.id} className={cn('p-4', overdue && 'border-rose-300 bg-rose-50/50')}>
+   630→   630→                        <div className="flex items-start justify-between gap-2">
+   631→   631→                          <div className="min-w-0">
+   632→   632→                            <div className="text-base font-extrabold text-[#253A2A]">{o.code}</div>
+   633→   633→                            <div className="truncate text-xs text-[#6B7A66]">{o.supplier?.name ?? '—'}</div>
+   634→   634→                          </div>
+   635→   635→                          <StatusBadge status={o.status} />
+   636→   636→                        </div>
+   637→   637→                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#6B7A66]">
+   638→   638→                          <span>تحویل: <b>{fmtJalali(o.receivingDate)}</b></span>
+   639→   639→                          <span>{toFaDigits(o._count?.items ?? 0)} قلم</span>
+   640→   640→                          <Money value={o.total} className="text-xs" />
+   641→   641→                        </div>
+   642→   642→                        {overdue && (
+   643→   643→                          <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3">
+   644→   644→                            <div className="flex items-center gap-1.5 text-xs font-bold text-rose-700">
+   645→   645→                              <AlertTriangle size={14} /> سفارش معوق — به تامین‌کننده پیگیری شود
+   646→   646→                            </div>
+   647→   647→                            <GhostButton className="mt-2 min-h-[44px] w-full" onClick={() => openOrder(o.id)}>
+   648→   648→                              <Eye size={15} /> مشاهده جزئیات سفارش
+   649→   649→                            </GhostButton>
+   650→   650→                          </div>
+   651→   651→                        )}
+   652→   652→                        {!overdue && (
+   653→   653→                          <GhostButton className="mt-3 min-h-[44px] w-full" onClick={() => openAction(o)}>
+   654→   654→                            {o.status === 'APPROVED' && hasReceive ? 'دریافت تحویل'
+   655→   655→                              : o.status === 'RECEIVED' && hasConfirm ? 'تایید انبار'
+   656→   656→                                : <><Eye size={15} /> مشاهده سفارش</>}
+   657→   657→                          </GhostButton>
+   658→   658→                        )}
+   659→   659→                      </Card>
+   660→   660→                    )
+   661→   661→                  })}
+   662→   662→                </div>
+   663→   663→              )}
+   664→   664→            </div>
+   665→   665→          )}
+   666→   666→
+   667→   667→          {/* ================= HISTORY TAB ================= */}
+   668→   668→          {tab === 'history' && (
+   669→   669→            done.length === 0 ? (
+   670→   670→              <EmptyState icon={<History size={40} />} title="تاریخچه خالی است" hint="سفارش‌های بسته‌شده در حسابداری اینجا نمایش داده می‌شوند." />
+   671→   671→            ) : (
+   672→   672→              <div className="max-h-[70vh] overflow-y-auto pz-scroll">
+   673→   673→                <TableWrap>
+   674→   674→                  <thead>
+   675→   675→                    <tr>
+   676→   676→                      <Th>کد سفارش</Th>
+   677→   677→                      <Th>تامین‌کننده</Th>
+   678→   678→                      <Th>مبلغ کل</Th>
+   679→   679→                      <Th>تاریخ بستن</Th>
+   680→   680→                      <Th className="text-left">عملیات</Th>
+   681→   681→                    </tr>
+   682→   682→                  </thead>
+   683→   683→                  <tbody>
+   684→   684→                    {done.map((o) => (
+   685→   685→                      <tr key={o.id} className="transition hover:bg-[#FBF9F3]">
+   686→   686→                        <Td className="font-bold">{o.code}</Td>
+   687→   687→                        <Td>{o.supplier?.name ?? '—'}</Td>
+   688→   688→                        <Td><Money value={o.total} className="text-xs font-semibold" /></Td>
+   689→   689→                        <Td className="text-xs">{fmtJalaliTime(o.doneAt)}</Td>
+   690→   690→                        <Td className="text-left">
+   691→   691→                          <GhostButton className="min-h-[44px]" onClick={() => openOrder(o.id)}>
+   692→   692→                            <Eye size={15} /> مشاهده
+   693→   693→                          </GhostButton>
+   694→   694→                        </Td>
+   695→   695→                      </tr>
+   696→   696→                    ))}
+   697→   697→                  </tbody>
+   698→   698→                </TableWrap>
+   699→   699→              </div>
+   700→   700→            )
+   701→   701→          )}
+   702→   702→        </>
+   703→   703→      )}
+   704→   704→
+   705→   705→      {/* sheet (receive / confirm) */}
+   706→   706→      <DeliverySheet
+   707→   707→        orderId={sheet?.id ?? null}
+   708→   708→        mode={sheet?.mode ?? 'receive'}
+   709→   709→        user={user}
+   710→   710→        onClose={closeSheet}
+   711→   711→        onDone={afterSheet}
+   712→   712→      />
+   713→   713→    </div>
+   714→   714→  )
+   715→   715→}
+   716→   716→
